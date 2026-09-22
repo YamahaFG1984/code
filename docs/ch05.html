@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 5 章 · 基于属性的测试 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="5">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 5 章</span>
+<h1>基于属性的测试</h1>
+<p class="lede">
+  到目前为止，我们都在做<strong>例子测试</strong>：把输入空间分区，从每个分区里挑一个具体例子。
+  如果不用挑呢？如果我们只描述「程序应该满足的规律」，让框架自己去生成几百上千个输入、拼命寻找反例呢？
+  这就是基于属性的测试（property-based testing）。这一章用五个由浅入深的例子，带你学会这种「换个角度」的思考方式。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>理解属性测试和例子测试的区别，读懂框架报告的反例</li>
+    <li>用 jqwik（Java）、Hypothesis（Python）、fast-check（TypeScript）写属性测试</li>
+    <li>学会构造复杂输入：自定义生成器、组合对象、随机操作序列</li>
+    <li>避开三个常见陷阱：生成不出的数据、错误的边界、分布不均</li>
+    <li>知道什么时候该用属性测试，什么时候例子测试就够了</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="idea">核心思想</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="例子测试从每个分区挑一个点，属性测试让框架在分区内生成大量随机点">
+  <text class="ttl" x="190" y="22" text-anchor="middle">例子测试</text>
+  <rect class="bx-d" x="20" y="36" width="340" height="150" rx="14"/>
+  <path class="ln" d="M190 36 V186"/>
+  <text class="sm" x="105" y="56" text-anchor="middle">不及格分区</text>
+  <text class="sm" x="275" y="56" text-anchor="middle">及格分区</text>
+  <circle class="bx-a" cx="105" cy="118" r="9"/>
+  <circle class="bx-a" cx="275" cy="118" r="9"/>
+  <text class="mono" x="105" y="148" text-anchor="middle">3.0</text>
+  <text class="mono" x="275" y="148" text-anchor="middle">7.5</text>
+  <text class="lbl" x="190" y="210" text-anchor="middle">「我」挑一个具体的点</text>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">属性测试</text>
+  <rect class="bx-d" x="400" y="36" width="340" height="150" rx="14"/>
+  <path class="ln" d="M570 36 V186"/>
+  <text class="sm" x="485" y="56" text-anchor="middle">∀ grade ∈ [1, 5)：不及格</text>
+  <text class="sm" x="655" y="56" text-anchor="middle">∀ grade ∈ [5, 10]：及格</text>
+  <g>
+    <circle class="bx-b" cx="420" cy="80" r="4"/><circle class="bx-b" cx="450" cy="120" r="4"/><circle class="bx-b" cx="470" cy="92" r="4"/>
+    <circle class="bx-b" cx="500" cy="150" r="4"/><circle class="bx-b" cx="520" cy="104" r="4"/><circle class="bx-b" cx="540" cy="170" r="4"/>
+    <circle class="bx-b" cx="435" cy="160" r="4"/><circle class="bx-b" cx="490" cy="76" r="4"/><circle class="bx-b" cx="555" cy="132" r="4"/>
+    <circle class="bx-b" cx="562" cy="90" r="4"/><circle class="bx-b" cx="410" cy="140" r="4"/><circle class="bx-b" cx="530" cy="140" r="4"/>
+    <circle class="bx-g" cx="590" cy="100" r="4"/><circle class="bx-g" cx="610" cy="150" r="4"/><circle class="bx-g" cx="640" cy="80" r="4"/>
+    <circle class="bx-g" cx="660" cy="130" r="4"/><circle class="bx-g" cx="690" cy="170" r="4"/><circle class="bx-g" cx="700" cy="96" r="4"/>
+    <circle class="bx-g" cx="720" cy="140" r="4"/><circle class="bx-g" cx="625" cy="118" r="4"/><circle class="bx-g" cx="675" cy="74" r="4"/>
+    <circle class="bx-g" cx="600" cy="170" r="4"/><circle class="bx-g" cx="730" cy="78" r="4"/><circle class="bx-g" cx="650" cy="164" r="4"/>
+    <circle class="bx-r" cx="576" cy="118" r="6"/>
+  </g>
+  <text class="lbl" x="570" y="210" text-anchor="middle">「我」描述规律，框架生成成百上千个点，边界值也会刻意去试</text>
+</svg>
+<figcaption>图 5-1　例子测试依赖你挑的那个例子；属性测试描述对整个分区都成立的规律</figcaption>
+</figure>
+
+<p>属性测试框架的工作流程：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="属性测试的工作流程：生成随机输入，检查属性，发现反例后收缩到最小，并报告种子">
+  <rect class="bx-b" x="14" y="50" width="130" height="64" rx="10"/>
+  <text class="ttl on-b" x="79" y="76" text-anchor="middle">① 生成</text>
+  <text class="sm" x="79" y="96" text-anchor="middle">按你的约束造随机数据</text>
+  <path class="ln" d="M146 82 H172" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="176" y="50" width="130" height="64" rx="10"/>
+  <text class="ttl on-a" x="241" y="76" text-anchor="middle">② 检查属性</text>
+  <text class="sm" x="241" y="96" text-anchor="middle">调用被测方法 + 断言</text>
+  <path class="ln-g" d="M241 48 V20 H79 V46" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="160" y="16" text-anchor="middle">通过 → 再来一组（默认 100～1000 次）</text>
+  <path class="ln-r" d="M308 82 H334" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="321" y="72" text-anchor="middle">失败</text>
+  <rect class="bx-r" x="338" y="50" width="130" height="64" rx="10"/>
+  <text class="ttl on-r" x="403" y="76" text-anchor="middle">③ 找到反例</text>
+  <text class="sm" x="403" y="96" text-anchor="middle">比如 grade = 7.3918…</text>
+  <path class="ln" d="M470 82 H496" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="500" y="50" width="120" height="64" rx="10"/>
+  <text class="ttl on-p" x="560" y="76" text-anchor="middle">④ 收缩</text>
+  <text class="sm" x="560" y="96" text-anchor="middle">化简到最小反例</text>
+  <path class="ln" d="M622 82 H646" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="650" y="50" width="96" height="64" rx="10"/>
+  <text class="ttl on-g" x="698" y="76" text-anchor="middle">⑤ 报告</text>
+  <text class="sm" x="698" y="96" text-anchor="middle">5.0 + 种子</text>
+  <text class="sm" x="380" y="150" text-anchor="middle">收缩（shrinking）：把一个又大又乱的反例不断化简，直到得到仍然失败的最简单输入，方便你调试</text>
+  <text class="sm" x="380" y="170" text-anchor="middle">种子（seed）：记下随机数种子，就能让框架重放同一串输入，稳定复现</text>
+</svg>
+<figcaption>图 5-2　属性测试框架在做什么</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>Java：jqwik</th><th>Python：Hypothesis</th><th>TypeScript：fast-check</th></tr>
+  <tr><td>标记属性测试</td><td><code>@Property</code></td><td><code>@given(...)</code></td><td><code>fc.assert(fc.property(...))</code></td></tr>
+  <tr><td>「对所有」参数</td><td><code>@ForAll</code> + 约束注解</td><td>策略（strategy）：<code>st.integers()</code>…</td><td>任意值（arbitrary）：<code>fc.integer()</code>…</td></tr>
+  <tr><td>自定义生成器</td><td><code>@Provide</code> 返回 <code>Arbitrary&lt;T&gt;</code></td><td>组合策略 / <code>@st.composite</code></td><td>组合 arbitrary / <code>.map</code> <code>.chain</code></td></tr>
+  <tr><td>默认运行次数</td><td>1000</td><td>100</td><td>100</td></tr>
+  <tr><td>操作序列（有状态）</td><td><code>ActionSequence</code></td><td><code>RuleBasedStateMachine</code></td><td><code>fc.commands</code> + <code>fc.modelRun</code></td></tr>
+</table>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 框架 API 各不相同，思路完全一样</div>
+  <p>JUnit、pytest、Vitest 长得都差不多，但属性测试框架的 API 差别很大。换语言时，你要做的是去学那门语言的框架；<strong>思考和推理的方式是通用的</strong>。本章重点关注作者的思考过程，注意写属性测试需要多少创造力。</p>
+</div>
+
+<h2 id="grade">例 1：及格线</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>成绩 ≥ 5.0 为及格，低于 5.0 为不及格。成绩的有效范围是 [1.0, 10.0]。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/PassingGrade.java"><pre>
+public class PassingGrade {
+  public boolean passed(float grade) {
+    if (grade &lt; 1 || grade &gt; 10)            // 前置条件
+      throw new IllegalArgumentException();
+    return grade &gt;= 5;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="passing_grade.py"><pre>
+def passed(grade: float) -&gt; bool:
+    if grade &lt; 1 or grade &gt; 10:              # 前置条件
+        raise ValueError("grade must be in [1, 10]")
+    return grade &gt;= 5
+</pre></div>
+<div class="code" data-lang="ts" data-file="passingGrade.ts"><pre>
+export function passed(grade: number): boolean {
+  if (grade &lt; 1 || grade &gt; 10) {           // 前置条件
+    throw new RangeError("grade must be in [1, 10]");
+  }
+  return grade &gt;= 5;
+}
+</pre></div>
+</div>
+
+<p>规格测试会得到「及格」「不及格」「超出范围」三个分区，每个分区一个用例。属性测试则把它们表述成<strong>对整个分区都成立的规律</strong>：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="及格线问题的三条属性">
+  <path class="ln" d="M20 70 H740"/>
+  <rect class="bx-r" x="20" y="50" width="120" height="40" rx="6"/>
+  <text class="ttl on-r" x="80" y="75" text-anchor="middle">invalid</text>
+  <rect class="bx-b" x="146" y="50" width="250" height="40" rx="6"/>
+  <text class="ttl on-b" x="271" y="75" text-anchor="middle">fail：返回 false</text>
+  <rect class="bx-g" x="402" y="50" width="218" height="40" rx="6"/>
+  <text class="ttl on-g" x="511" y="75" text-anchor="middle">pass：返回 true</text>
+  <rect class="bx-r" x="626" y="50" width="114" height="40" rx="6"/>
+  <text class="ttl on-r" x="683" y="75" text-anchor="middle">invalid</text>
+  <text class="mono" x="143" y="112" text-anchor="middle">1.0</text>
+  <text class="mono" x="399" y="112" text-anchor="middle">5.0</text>
+  <text class="mono" x="623" y="112" text-anchor="middle">10.0</text>
+  <text class="sm" x="271" y="132" text-anchor="middle">[1.0, 5.0)，含 1、不含 5</text>
+  <text class="sm" x="511" y="132" text-anchor="middle">[5.0, 10.0]，两端都含</text>
+  <text class="sm" x="80" y="40" text-anchor="middle">&lt; 1.0：抛异常</text>
+  <text class="sm" x="683" y="40" text-anchor="middle">&gt; 10.0：抛异常</text>
+</svg>
+<figcaption>图 5-3　三条属性：fail、pass、invalid</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/PassingGradePBTest.java（jqwik）"><pre>
+public class PassingGradePBTest {
+  private final PassingGrade pg = new PassingGrade();
+
+  @Property                      // 不是 @Test：这是一条属性
+  void fail(@ForAll                                        // 由 jqwik 生成
+            @FloatRange(min = 1f, max = 5f, maxIncluded = false)
+            float grade) {
+    assertThat(pg.passed(grade)).isFalse();
+  }
+
+  @Property
+  void pass(@ForAll
+            @FloatRange(min = 5f, max = 10f, maxIncluded = true)
+            float grade) {
+    assertThat(pg.passed(grade)).isTrue();
+  }
+
+  @Property
+  void invalid(@ForAll("invalidGrades") float grade) {     // 用下面的 provider 生成
+    assertThatThrownBy(() -&gt; pg.passed(grade))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Provide
+  private Arbitrary&lt;Float&gt; invalidGrades() {
+    return Arbitraries.oneOf(                  // 二选一，两边均匀分布
+        Arbitraries.floats().lessThan(1f),
+        Arbitraries.floats().greaterThan(10f));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_passing_grade.py（Hypothesis）"><pre>
+import pytest
+from hypothesis import given, strategies as st
+from passing_grade import passed
+
+@given(st.floats(min_value=1.0, max_value=5.0, exclude_max=True))
+def test_fail(grade):
+    assert passed(grade) is False
+
+@given(st.floats(min_value=5.0, max_value=10.0))
+def test_pass(grade):
+    assert passed(grade) is True
+
+invalid_grades = st.one_of(                    # 二选一，两边均匀分布
+    st.floats(max_value=1.0, exclude_max=True),
+    st.floats(min_value=10.0, exclude_min=True),
+)
+
+@given(invalid_grades)
+def test_invalid(grade):
+    with pytest.raises(ValueError):
+        passed(grade)
+</pre></div>
+<div class="code" data-lang="ts" data-file="passingGrade.test.ts（fast-check）"><pre>
+import { test, expect } from "vitest";
+import fc from "fast-check";
+import { passed } from "./passingGrade";
+
+test("fail", () =&gt; {
+  fc.assert(fc.property(
+    fc.double({ min: 1, max: 5, maxExcluded: true, noNaN: true }),
+    (grade) =&gt; { expect(passed(grade)).toBe(false); }));
+});
+
+test("pass", () =&gt; {
+  fc.assert(fc.property(
+    fc.double({ min: 5, max: 10, noNaN: true }),
+    (grade) =&gt; { expect(passed(grade)).toBe(true); }));
+});
+
+const invalidGrades = fc.oneof(               // 二选一，两边均匀分布
+  fc.double({ max: 1, maxExcluded: true, noNaN: true }),
+  fc.double({ min: 10, minExcluded: true, noNaN: true }));
+
+test("invalid", () =&gt; {
+  fc.assert(fc.property(invalidGrades, (grade) =&gt; {
+    expect(() =&gt; passed(grade)).toThrow(RangeError);
+  }));
+});
+</pre></div>
+</div>
+
+<p>
+  写法很像普通测试，只是参数由框架生成。如果只写 <code>@ForAll</code> 不加约束，jqwik 会尝试任意 float；这里我们用 <code>@FloatRange</code> 限定在 [1.0, 5.0)。
+  更复杂的输入（比如「小于 1 <em>或</em> 大于 10」）用 provider 方法表达，返回一个 <code>Arbitrary</code> —— 框架表示「任意值」的方式。
+  jqwik 的 <code>Arbitraries</code> 类有几十个辅助方法，值得逛一逛它的用户指南。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 第一次用？打印出来看看</div>
+  <p>在测试方法里加一行打印，看看框架都生成了什么值。你会惊讶于它们有多随机、跨度有多大。</p>
+</div>
+
+<h3>故意放一个 Bug</h3>
+
+<p>把 <code>return grade &gt;= 5</code> 改成 <code>return grade &gt; 5</code> —— 经典的差一错误。再跑测试，pass 属性失败了。jqwik 的输出：</p>
+
+<div class="code" data-lang="text" data-file="jqwik 的失败报告"><pre>
+|-------------------jqwik-------------------
+tries = 11                    | # of calls to property
+checks = 11                   | # of not rejected calls
+generation = RANDOMIZED       | parameters are randomly generated
+after-failure = PREVIOUS_SEED | use the previous seed
+edge-cases#mode = MIXIN       | edge cases are mixed in
+seed = 7015333710778187630    | random seed to reproduce generated values
+
+Sample
+------
+  arg0: 5.0
+</pre></div>
+
+<p>
+  只试了 <strong>11 次</strong>就找到了反例！注意 <code>seed</code>：以后可以用这个种子强制 jqwik 生成同一串输入。最下面是导致失败的样本：<strong>5.0</strong>，正是边界。
+  Hypothesis 和 fast-check 的报告也类似：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="text" data-file="Hypothesis 的失败报告（节选）"><pre>
+E       assert False is True
+E        +  where False = passed(5.0)
+E       Failing test case: test_pass(
+E           grade=5.0,
+E       )
+# 失败样例会存进 .hypothesis/ 目录，下次运行时优先重放
+</pre></div>
+<div class="code" data-lang="text" data-file="fast-check 的失败报告（节选）"><pre>
+Property failed after 12 tests
+{ seed: 1, path: "11", endOnFailure: true }
+Counterexample: [5]
+Shrunk 0 time(s)
+# 用 fc.assert(prop, { seed: 1, path: "11" }) 可以精确重放
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 属性测试也会试边界</div>
+  <p>
+    框架很聪明，会刻意生成边界值（edge cases）：要「小于 1.0 的 float」，它会试最接近 1.0 的数；要「任意整数」，它会试最大值、最小值、0 和负数。
+    jqwik 默认把边界值「混入」随机数据中（上面报告里的 <code>edge-cases#mode = MIXIN</code>）。
+  </p>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 但它终究是随机的</div>
+  <p>
+    我们实测了这个 <code>&gt;</code> 的 Bug：Hypothesis 15 次运行 15 次都在 5.0 处抓住了它；fast-check 默认每次跑 100 组，50 次运行中抓住了 39 次 —— 大约每 5 次会漏 1 次。
+    不同框架「偏爱边界」的程度不一样。所以，<strong>对你明确知道的关键边界（这里的 5.0），仍然值得写一个例子测试把它钉死</strong>；属性测试负责探索你没想到的地方。
+  </p>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 一个意外的发现：NaN</div>
+  <p>
+    注意 TypeScript 标签页里的 <code>noNaN: true</code>：fast-check 即使设定了 min/max，默认<strong>仍会</strong>生成 NaN（非数字）；去掉它，pass 属性马上会报出 <code>Counterexample: [Number.NaN]</code>。
+    Hypothesis 则不会在有界范围里生成 NaN，所以 Python 版三条属性都能通过 —— 可这恰恰把一个问题藏了起来。换一个更「宽」的属性试试：<strong>对任意浮点数，要么被拒绝，要么它就在 [1, 10] 之内</strong>。
+  </p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="只有 [1, 10] 的成绩会被接受"><pre>
+@Property
+void onlyValidGradesAreAccepted(@ForAll float grade) {
+  try {
+    pg.passed(grade);
+  } catch (IllegalArgumentException e) {
+    return;                                       // 被拒绝：没问题
+  }
+  assertThat(grade).isBetween(1f, 10f);           // 被接受：那它必须在范围内
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="只有 [1, 10] 的成绩会被接受"><pre>
+@given(st.floats())                               # 不设界：会生成 NaN、±inf
+def test_only_valid_grades_are_accepted(grade):
+    try:
+        passed(grade)
+    except ValueError:
+        return                                    # 被拒绝：没问题
+    assert 1 &lt;= grade &lt;= 10                       # 被接受：那它必须在范围内
+
+# Failing test case: test_only_valid_grades_are_accepted(
+#     grade=nan,
+# )
+</pre></div>
+<div class="code" data-lang="ts" data-file="只有 [1, 10] 的成绩会被接受"><pre>
+test("only valid grades are accepted", () =&gt; {
+  fc.assert(fc.property(fc.double(), (grade) =&gt; {  // 不设界：会生成 NaN、±Infinity
+    let accepted = true;
+    try { passed(grade); } catch { accepted = false; }
+    if (accepted) expect(grade &gt;= 1 &amp;&amp; grade &lt;= 10).toBe(true);
+  }));
+});
+
+// 某次运行的输出（不是每次都能抓到，见下文）：
+// Property failed after 9 tests
+// Counterexample: [Number.NaN]
+</pre></div>
+</div>
+
+<p>
+  两个框架都能报告出 <strong>NaN</strong> 这个反例（我们实测：Hypothesis 15 次运行里抓到 12 次；fast-check 默认 100 组的情况下，200 次运行里抓到 55 次，大约四分之一 ——
+  想更稳，就调大 <code>numRuns</code>，或者把 NaN 作为一个明确的例子测试写进去）。原因是：<code>NaN &lt; 1</code> 和 <code>NaN &gt; 10</code> 都是 false，所以 <code>passed(NaN)</code> 不会抛异常，
+  而是悄悄返回 false —— 前置条件被绕过了。按 IEEE 754 浮点规则，Java 版的比较也完全一样，也有这个洞。
+  这就是属性测试的魅力：它会去试你根本没想到的输入。发现之后，由你决定是修代码（显式拒绝 NaN）还是修规格。
+</p>
+
+<h2 id="unique">例 2：unique 方法</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求（改编自 Apache Commons 的 MathArrays.unique）</div>
+  <p>返回一个由 data 中不重复的值组成的数组，按<strong>降序</strong>排列。允许空数组；data 为 null 时抛出 NullPointerException。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/MathArrays.java"><pre>
+public static int[] unique(int[] data) {
+  TreeSet&lt;Integer&gt; values = new TreeSet&lt;Integer&gt;();   // TreeSet 自动去重并排序（升序）
+  for (int i = 0; i &lt; data.length; i++) {
+    values.add(data[i]);
+  }
+  final int count = values.size();
+  final int[] out = new int[count];
+  Iterator&lt;Integer&gt; iterator = values.iterator();
+  int i = 0;
+  while (iterator.hasNext()) {
+    out[count - ++i] = iterator.next();                // 从后往前填 → 降序
+  }
+  return out;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="math_arrays.py"><pre>
+def unique(data: list[int]) -&gt; list[int]:
+    values = sorted(set(data))          # 去重并升序
+    out = [0] * len(values)
+    for i, v in enumerate(values):
+        out[len(values) - 1 - i] = v    # 从后往前填 → 降序
+    return out
+</pre></div>
+<div class="code" data-lang="ts" data-file="mathArrays.ts"><pre>
+export function unique(data: number[]): number[] {
+  const values = [...new Set(data)].sort((a, b) =&gt; a - b);  // 去重并升序
+  const out = new Array&lt;number&gt;(values.length);
+  values.forEach((v, i) =&gt; {
+    out[values.length - 1 - i] = v;                          // 从后往前填 → 降序
+  });
+  return out;
+}
+</pre></div>
+</div>
+
+<p>
+  直接上属性：<em>给定任意整数数组，返回的新数组只包含原数组中不重复的值，并且降序排列</em>。
+  为了确保数组里<strong>一定有重复</strong>，我们生成长度为 100、取值在 [1, 20] 的列表 —— 100 个数只能取 20 种值，必然有重复。
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/MathArraysPBTest.java"><pre>
+@Property
+void unique(@ForAll @Size(value = 100)
+            List&lt;@IntRange(min = 1, max = 20) Integer&gt; numbers) {
+
+  int[] doubles = convertListToArray(numbers);
+  int[] result = MathArrays.unique(doubles);
+
+  assertThat(result)
+      .contains(doubles)                                  // 包含所有元素
+      .doesNotHaveDuplicates()                            // 没有重复
+      .isSortedAccordingTo(Comparator.reverseOrder());    // 降序
+}
+
+private int[] convertListToArray(List&lt;Integer&gt; numbers) {
+  return numbers.stream().mapToInt(x -&gt; x).toArray();
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_math_arrays.py"><pre>
+from hypothesis import given, strategies as st
+from math_arrays import unique
+
+@given(st.lists(st.integers(min_value=1, max_value=20), min_size=100, max_size=100))
+def test_unique(numbers):
+    result = unique(numbers)
+
+    assert set(result) == set(numbers)                  # 包含所有元素（且没多出东西）
+    assert len(result) == len(set(result))              # 没有重复
+    assert result == sorted(result, reverse=True)       # 降序
+</pre></div>
+<div class="code" data-lang="ts" data-file="mathArrays.test.ts"><pre>
+import { test, expect } from "vitest";
+import fc from "fast-check";
+import { unique } from "./mathArrays";
+
+test("unique", () =&gt; {
+  fc.assert(fc.property(
+    fc.array(fc.integer({ min: 1, max: 20 }), { minLength: 100, maxLength: 100 }),
+    (numbers) =&gt; {
+      const result = unique(numbers);
+
+      expect(new Set(result)).toEqual(new Set(numbers));          // 包含所有元素
+      expect(result.length).toBe(new Set(result).size);           // 没有重复
+      expect(result).toEqual([...result].sort((a, b) =&gt; b - a));  // 降序
+    }));
+});
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 善用断言库</div>
+  <p>AssertJ 的 <code>contains</code>、<code>doesNotHaveDuplicates</code>、<code>isSortedAccordingTo</code> 省了大量代码。写复杂断言前，先查查断言库有没有现成的。</p>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 不限定范围会怎样？</div>
+  <p>作者的一个学生发现，即使不把整数限定在 [1, 20]，jqwik 生成的数组里也有约 11% 含重复元素。11% 够不够？作为测试者你应该思考这个问题。他用的是 jqwik 的<strong>统计功能</strong>来测量输入分布（Hypothesis 有 <code>event()</code> 和 <code>--hypothesis-show-statistics</code>，fast-check 有 <code>fc.statistics</code>）。</p>
+</div>
+
+<h2 id="indexof">例 3：indexOf 方法</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求（Apache Commons 的 ArrayUtils.indexOf）</div>
+  <p>从给定下标开始，在数组中查找给定值的下标。数组为 null 返回 -1；startIndex 为负数视为 0；startIndex 超过数组长度返回 -1。找不到返回 -1。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/ArrayUtils.java"><pre>
+public static int indexOf(final int[] array, final int valueToFind, int startIndex) {
+  if (array == null) {
+    return -1;             // 弱前置条件：接受 null，返回 -1
+  }
+  if (startIndex &lt; 0) {
+    startIndex = 0;        // 同样很宽容：负数当作 0
+  }
+  for (int i = startIndex; i &lt; array.length; i++) {
+    if (valueToFind == array[i]) {
+      return i;
+    }
+  }
+  return -1;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="array_utils.py"><pre>
+def index_of(array: list[int] | None, value_to_find: int, start_index: int) -&gt; int:
+    if array is None:
+        return -1          # 弱前置条件：接受 None，返回 -1
+    if start_index &lt; 0:
+        start_index = 0    # 同样很宽容：负数当作 0
+    for i in range(start_index, len(array)):
+        if array[i] == value_to_find:
+            return i
+    return -1
+</pre></div>
+<div class="code" data-lang="ts" data-file="arrayUtils.ts"><pre>
+export function indexOf(array: number[] | null, valueToFind: number, startIndex: number): number {
+  if (array == null) {
+    return -1;             // 弱前置条件：接受 null，返回 -1
+  }
+  if (startIndex &lt; 0) {
+    startIndex = 0;        // 同样很宽容：负数当作 0
+  }
+  for (let i = startIndex; i &lt; array.length; i++) {
+    if (array[i] === valueToFind) return i;
+  }
+  return -1;
+}
+</pre></div>
+</div>
+
+<p>先用已经学过的技术。分区：</p>
+
+<div class="cards">
+  <div class="card"><h4>array</h4><p>null · 单个元素 · 多个元素</p></div>
+  <div class="card"><h4>valueToFind</h4><p>任意整数</p></div>
+  <div class="card"><h4>startIndex</h4><p>负数 · 0（边界）· 正数</p></div>
+  <div class="card"><h4>(array, startIndex)</h4><p>在数组范围内 · 超出范围</p></div>
+  <div class="card"><h4>(array, valueToFind)</h4><p>不在数组中 · 在 · 出现多次</p></div>
+  <div class="card"><h4>三者组合</h4><p>在 startIndex 之前 · 之后 · 恰好在（边界）· 之后多次 · 前后各有一个</p></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/ArrayUtilsTest.java"><pre>
+@ParameterizedTest
+@MethodSource("testCases")
+void testIndexOf(int[] array, int valueToFind, int startIndex, int expectedResult) {
+  int result = ArrayUtils.indexOf(array, valueToFind, startIndex);
+  assertThat(result).isEqualTo(expectedResult);
+}
+
+static Stream&lt;Arguments&gt; testCases() {
+  int[] array = new int[] { 1, 2, 3, 4, 5, 4, 6, 7 };
+  return Stream.of(
+    of(null, 1, 1, -1),              // T1  数组为 null
+    of(new int[] { 1 }, 1, 0, 0),    // T2  单元素，找得到
+    of(new int[] { 1 }, 2, 0, -1),   // T3  单元素，找不到
+    of(array, 1, 10, -1),            // T4  startIndex 越界
+    of(array, 2, -1, 1),             // T5  startIndex 为负
+    of(array, 4, 6, -1),             // T6  值在 startIndex 之前
+    of(array, 4, 1, 3),              // T7  值在 startIndex 之后
+    of(array, 4, 3, 3),              // T8  值恰好在 startIndex
+    of(array, 4, 1, 3),              // T9  出现多次，startIndex 在它们之前
+    of(array, 4, 4, 5),              // T10 出现多次，一个在 startIndex 之前
+    of(array, 8, 0, -1)              // T11 不在数组中
+  );
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_array_utils.py"><pre>
+import pytest
+from array_utils import index_of
+
+ARRAY = [1, 2, 3, 4, 5, 4, 6, 7]
+
+@pytest.mark.parametrize("array, value, start, expected", [
+    (None, 1, 1, -1),        # T1  数组为 None
+    ([1], 1, 0, 0),          # T2  单元素，找得到
+    ([1], 2, 0, -1),         # T3  单元素，找不到
+    (ARRAY, 1, 10, -1),      # T4  start 越界
+    (ARRAY, 2, -1, 1),       # T5  start 为负
+    (ARRAY, 4, 6, -1),       # T6  值在 start 之前
+    (ARRAY, 4, 1, 3),        # T7  值在 start 之后
+    (ARRAY, 4, 3, 3),        # T8  值恰好在 start
+    (ARRAY, 4, 1, 3),        # T9  出现多次，start 在它们之前
+    (ARRAY, 4, 4, 5),        # T10 出现多次，一个在 start 之前
+    (ARRAY, 8, 0, -1),       # T11 不在数组中
+])
+def test_index_of(array, value, start, expected):
+    assert index_of(array, value, start) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="arrayUtils.test.ts"><pre>
+import { test, expect } from "vitest";
+import { indexOf } from "./arrayUtils";
+
+const ARRAY = [1, 2, 3, 4, 5, 4, 6, 7];
+
+test.each&lt;[number[] | null, number, number, number]&gt;([
+  [null, 1, 1, -1],        // T1  数组为 null
+  [[1], 1, 0, 0],          // T2  单元素，找得到
+  [[1], 2, 0, -1],         // T3  单元素，找不到
+  [ARRAY, 1, 10, -1],      // T4  startIndex 越界
+  [ARRAY, 2, -1, 1],       // T5  startIndex 为负
+  [ARRAY, 4, 6, -1],       // T6  值在 startIndex 之前
+  [ARRAY, 4, 1, 3],        // T7  值在 startIndex 之后
+  [ARRAY, 4, 3, 3],        // T8  值恰好在 startIndex
+  [ARRAY, 4, 1, 3],        // T9  出现多次，startIndex 在它们之前
+  [ARRAY, 4, 4, 5],        // T10 出现多次，一个在 startIndex 之前
+  [ARRAY, 8, 0, -1],       // T11 不在数组中
+])("indexOf(%j, %i, %i) = %i", (array, value, start, expected) =&gt; {
+  expect(indexOf(array, value, start)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<p>
+  作为对比，Apache Commons 自己的测试覆盖了我们的 T1、T4、T5、T6、T7、T8、T10、T11，但没测单元素数组，也没测「找到之后又出现一次」的情况。
+  两套测试都不错。现在我们用属性测试来表达这个方法的<strong>主要行为</strong>。
+</p>
+
+<h3>设计属性</h3>
+
+<p>
+  思路：在一个随机数组的随机位置插入一个随机值，然后让 indexOf 去找它，断言返回的下标就是我们插入的位置。
+  难点在于：<strong>插入的值不能已经在数组里</strong>。比如数组 [1, 2, 3, 4]，在下标 1 插入 4，从下标 0 开始找会得到 1，从下标 3 开始找会得到 4 —— 断言就乱了。
+  巧妙的办法：让数组取值在 [-1000, 1000]，插入值取自 [1001, 2000]，二者绝不相交。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="indexOf 属性测试的数据生成：在随机列表的随机位置插入一个不在列表中的值">
+  <text class="sm" x="20" y="22">numbers：100 个 [-1000, 1000] 的随机数（插入后长度 101）</text>
+  <g>
+    <rect class="bx" x="20"  y="34" width="50" height="36" rx="4"/><text class="mono" x="45"  y="57" text-anchor="middle">5</text>
+    <rect class="bx" x="72"  y="34" width="50" height="36" rx="4"/><text class="mono" x="97"  y="57" text-anchor="middle">6</text>
+    <rect class="bx" x="124" y="34" width="50" height="36" rx="4"/><text class="mono" x="149" y="57" text-anchor="middle">87</text>
+    <rect class="bx" x="176" y="34" width="50" height="36" rx="4"/><text class="mono" x="201" y="57" text-anchor="middle">…</text>
+    <rect class="bx" x="228" y="34" width="50" height="36" rx="4"/><text class="mono" x="253" y="57" text-anchor="middle">31</text>
+    <rect class="bx" x="280" y="34" width="50" height="36" rx="4"/><text class="mono" x="305" y="57" text-anchor="middle">-1</text>
+    <rect class="bx-a" x="332" y="34" width="60" height="36" rx="4"/><text class="mono on-a" x="362" y="57" text-anchor="middle">1500</text>
+    <rect class="bx" x="394" y="34" width="50" height="36" rx="4"/><text class="mono" x="419" y="57" text-anchor="middle">56</text>
+    <rect class="bx" x="446" y="34" width="50" height="36" rx="4"/><text class="mono" x="471" y="57" text-anchor="middle">…</text>
+    <rect class="bx" x="498" y="34" width="50" height="36" rx="4"/><text class="mono" x="523" y="57" text-anchor="middle">89</text>
+    <rect class="bx" x="550" y="34" width="50" height="36" rx="4"/><text class="mono" x="575" y="57" text-anchor="middle">-42</text>
+  </g>
+  <text class="sm" x="45" y="86" text-anchor="middle">0</text><text class="sm" x="97" y="86" text-anchor="middle">1</text>
+  <text class="sm" x="149" y="86" text-anchor="middle">2</text><text class="sm" x="362" y="86" text-anchor="middle">58</text><text class="sm" x="575" y="86" text-anchor="middle">100</text>
+
+  <path class="ln-a" d="M362 100 V120"/>
+  <rect class="bx-a" x="290" y="122" width="200" height="46" rx="8"/>
+  <text class="ttl on-a" x="390" y="142" text-anchor="middle">value = 1500，插在下标 58</text>
+  <text class="sm" x="390" y="159" text-anchor="middle">value ∈ [1001, 2000]：绝不在原列表中</text>
+
+  <path class="ln-b" d="M149 100 V190"/>
+  <text class="lbl on-b" x="30" y="206">startIndex 可能在插入位置之前 →</text>
+  <text class="lbl on-b" x="30" y="226">期望返回 58</text>
+  <path class="ln-p" d="M523 100 V190"/>
+  <text class="lbl on-p" x="480" y="206">← 也可能在之后</text>
+  <text class="lbl on-p" x="480" y="226">期望返回 -1</text>
+  <text class="sm" x="640" y="140">两个下标都在</text>
+  <text class="sm" x="640" y="156">[0, 99] 随机取，</text>
+  <text class="sm" x="640" y="172">两种情况约各占 50%</text>
+</svg>
+<figcaption>图 5-4　indexOf 属性测试如何生成数据</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/ArrayUtilsTest.java（属性测试）"><pre>
+@Property
+void indexOfShouldFindFirstValue(
+    @ForAll @Size(value = 100)
+    List&lt;@IntRange(min = -1000, max = 1000) Integer&gt; numbers,   // 100 个随机数
+    @ForAll @IntRange(min = 1001, max = 2000) int value,        // 绝不在列表中的值
+    @ForAll @IntRange(max = 99) int indexToAddElement,          // 插入位置
+    @ForAll @IntRange(max = 99) int startIndex) {               // 从哪开始找
+
+  numbers.add(indexToAddElement, value);
+  int[] array = convertListToArray(numbers);
+
+  // 插在 startIndex 之后（或恰好在）→ 找得到；插在之前 → 找不到
+  int expectedIndex = indexToAddElement &gt;= startIndex ? indexToAddElement : -1;
+  assertThat(ArrayUtils.indexOf(array, value, startIndex)).isEqualTo(expectedIndex);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_array_utils.py（属性测试）"><pre>
+from hypothesis import given, strategies as st
+
+@given(
+    numbers=st.lists(st.integers(-1000, 1000), min_size=100, max_size=100),
+    value=st.integers(1001, 2000),              # 绝不在列表中的值
+    index_to_add=st.integers(0, 99),            # 插入位置
+    start_index=st.integers(0, 99),             # 从哪开始找
+)
+def test_index_of_should_find_first_value(numbers, value, index_to_add, start_index):
+    numbers.insert(index_to_add, value)
+
+    # 插在 start_index 之后（或恰好在）→ 找得到；插在之前 → 找不到
+    expected = index_to_add if index_to_add &gt;= start_index else -1
+    assert index_of(numbers, value, start_index) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="arrayUtils.test.ts（属性测试）"><pre>
+import fc from "fast-check";
+
+test("indexOf should find first value", () =&gt; {
+  fc.assert(fc.property(
+    fc.array(fc.integer({ min: -1000, max: 1000 }), { minLength: 100, maxLength: 100 }),
+    fc.integer({ min: 1001, max: 2000 }),       // 绝不在列表中的值
+    fc.integer({ min: 0, max: 99 }),            // 插入位置
+    fc.integer({ min: 0, max: 99 }),            // 从哪开始找
+    (numbers, value, indexToAdd, startIndex) =&gt; {
+      numbers.splice(indexToAdd, 0, value);
+
+      // 插在 startIndex 之后（或恰好在）→ 找得到；插在之前 → 找不到
+      const expected = indexToAdd &gt;= startIndex ? indexToAdd : -1;
+      expect(indexOf(numbers, value, startIndex)).toBe(expected);
+    }));
+});
+</pre></div>
+</div>
+
+<p>这个属性测试比前面的例子测试更好地检验了方法的本质。它也说明了<strong>写属性测试需要创造力</strong>：想出「生成一个绝不在列表中的值」，以及处理「插入位置可能在起点前或后」的断言。作者提醒注意两点：</p>
+
+<ol class="steps">
+  <li><strong>你的测试有多接近真实世界？</strong>如果生成的数据和实际使用中的相差十万八千里，那可能不是个好测试。</li>
+  <li><strong>各个分区被检验的概率一样吗？</strong>这里要找的值有时在起点前、有时在起点后。如果 95% 的输入都在起点前，测试就严重偏向了。两个下标都在 0–99 随机，大约是五五开。拿不准时，打印出来看看分布。</li>
+</ol>
+
+<h2 id="basket">例 4：购物车 —— 随机操作序列</h2>
+
+<p>回到第 4 章的 <code>Basket</code>。一个没读过前几章的开发者大概会写这样几个测试：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/BasketTest.java"><pre>
+public class BasketTest {
+  private Basket basket = new Basket();
+
+  @Test
+  void addProducts() {
+    basket.add(new Product("TV", valueOf(10)), 2);
+    basket.add(new Product("Playstation", valueOf(100)), 1);
+    // BigDecimal 要用 compareTo 比较，isEqualByComparingTo 就是干这个的
+    assertThat(basket.getTotalValue()).isEqualByComparingTo(valueOf(10*2 + 100*1));
+  }
+
+  @Test
+  void addSameProductTwice() {
+    Product p = new Product("TV", valueOf(10));
+    basket.add(p, 2);
+    basket.add(p, 3);
+    assertThat(basket.getTotalValue()).isEqualByComparingTo(valueOf(10*5));
+  }
+
+  @Test
+  void removeProducts() {
+    basket.add(new Product("TV", valueOf(100)), 1);
+    Product p = new Product("Playstation", valueOf(10));
+    basket.add(p, 2);
+    basket.remove(p);
+    // 思考题：只断言总价够吗？也许还该断言 Playstation 已不在购物车里
+    assertThat(basket.getTotalValue()).isEqualByComparingTo(valueOf(100));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_basket.py"><pre>
+from decimal import Decimal
+from basket import Basket, Product
+
+def test_add_products():
+    basket = Basket()
+    basket.add(Product("TV", Decimal(10)), 2)
+    basket.add(Product("Playstation", Decimal(100)), 1)
+    assert basket.total_value == Decimal(10 * 2 + 100 * 1)
+
+def test_add_same_product_twice():
+    basket = Basket()
+    p = Product("TV", Decimal(10))
+    basket.add(p, 2)
+    basket.add(p, 3)
+    assert basket.total_value == Decimal(10 * 5)
+
+def test_remove_products():
+    basket = Basket()
+    basket.add(Product("TV", Decimal(100)), 1)
+    p = Product("Playstation", Decimal(10))
+    basket.add(p, 2)
+    basket.remove(p)
+    # 思考题：只断言总价够吗？也许还该断言 Playstation 已不在购物车里
+    assert basket.total_value == Decimal(100)
+</pre></div>
+<div class="code" data-lang="ts" data-file="basket.test.ts"><pre>
+import { test, expect } from "vitest";
+import { Basket } from "./basket";
+
+test("add products", () =&gt; {
+  const basket = new Basket();
+  basket.add({ name: "TV", priceInCents: 1000 }, 2);
+  basket.add({ name: "Playstation", priceInCents: 10000 }, 1);
+  expect(basket.totalValueInCents).toBe(1000 * 2 + 10000 * 1);
+});
+
+test("add same product twice", () =&gt; {
+  const basket = new Basket();
+  const p = { name: "TV", priceInCents: 1000 };
+  basket.add(p, 2);
+  basket.add(p, 3);
+  expect(basket.totalValueInCents).toBe(1000 * 5);
+});
+
+test("remove products", () =&gt; {
+  const basket = new Basket();
+  basket.add({ name: "TV", priceInCents: 10000 }, 1);
+  const p = { name: "Playstation", priceInCents: 1000 };
+  basket.add(p, 2);
+  basket.remove(p);
+  // 思考题：只断言总价够吗？也许还该断言 Playstation 已不在购物车里
+  expect(basket.totalValueInCents).toBe(10000);
+});
+</pre></div>
+</div>
+
+<p>
+  问题是这些测试检验得不够彻底。如果实现有 Bug，它很可能藏在一串<strong>又长又出人意料</strong>的 add 和 remove 之后才出现，就算做了规格测试和结构化测试也很难想到那个序列。
+  但我们可以把它表达成一条属性：<strong>无论以什么顺序、调用多少次 add 和 remove，购物车算出的总价永远正确。</strong>
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="框架生成任意的 add 与 remove 操作序列">
+  <text class="mono" x="20" y="40">T1 =</text>
+  <rect class="bx-g" x="70" y="22" width="70" height="28" rx="6"/><text class="sm on-g" x="105" y="41" text-anchor="middle">Add</text>
+  <rect class="bx-g" x="146" y="22" width="70" height="28" rx="6"/><text class="sm on-g" x="181" y="41" text-anchor="middle">Add</text>
+  <rect class="bx-r" x="222" y="22" width="80" height="28" rx="6"/><text class="sm on-r" x="262" y="41" text-anchor="middle">Remove</text>
+
+  <text class="mono" x="20" y="86">T2 =</text>
+  <rect class="bx-g" x="70" y="68" width="70" height="28" rx="6"/><text class="sm on-g" x="105" y="87" text-anchor="middle">Add</text>
+  <rect class="bx-r" x="146" y="68" width="80" height="28" rx="6"/><text class="sm on-r" x="186" y="87" text-anchor="middle">Remove</text>
+  <rect class="bx-g" x="232" y="68" width="70" height="28" rx="6"/><text class="sm on-g" x="267" y="87" text-anchor="middle">Add</text>
+  <rect class="bx-g" x="308" y="68" width="70" height="28" rx="6"/><text class="sm on-g" x="343" y="87" text-anchor="middle">Add</text>
+  <rect class="bx-g" x="384" y="68" width="70" height="28" rx="6"/><text class="sm on-g" x="419" y="87" text-anchor="middle">Add</text>
+  <rect class="bx-r" x="460" y="68" width="80" height="28" rx="6"/><text class="sm on-r" x="500" y="87" text-anchor="middle">Remove</text>
+
+  <text class="mono" x="20" y="132">T3 =</text>
+  <rect class="bx-g" x="70" y="114" width="70" height="28" rx="6"/><text class="sm on-g" x="105" y="133" text-anchor="middle">Add</text>
+  <rect class="bx-r" x="146" y="114" width="80" height="28" rx="6"/><text class="sm on-r" x="186" y="133" text-anchor="middle">Remove</text>
+  <rect class="bx-g" x="232" y="114" width="70" height="28" rx="6"/><text class="sm on-g" x="267" y="133" text-anchor="middle">Add</text>
+  <rect class="bx-r" x="308" y="114" width="80" height="28" rx="6"/><text class="sm on-r" x="348" y="133" text-anchor="middle">Remove</text>
+  <rect class="bx-r" x="394" y="114" width="80" height="28" rx="6"/><text class="sm on-r" x="434" y="133" text-anchor="middle">Remove</text>
+
+  <text class="mono" x="20" y="172">T4 = …</text>
+
+  <rect class="bx-a" x="560" y="30" width="186" height="120" rx="10"/>
+  <text class="ttl on-a" x="653" y="56" text-anchor="middle">每一步之后都检查</text>
+  <text class="sm" x="653" y="80" text-anchor="middle">Add：总价 = 旧总价 +</text>
+  <text class="sm" x="653" y="96" text-anchor="middle">单价 × 数量</text>
+  <text class="sm" x="653" y="118" text-anchor="middle">Remove：总价 = 旧总价 −</text>
+  <text class="sm" x="653" y="134" text-anchor="middle">单价 × 该商品数量</text>
+  <text class="sm" x="380" y="198" text-anchor="middle">商品从固定列表里随机挑，数量在 1–100 随机，序列长度也随机</text>
+</svg>
+<figcaption>图 5-5　让框架生成任意的操作序列，每一步都断言购物车状态正确</figcaption>
+</figure>
+
+<p>要从购物车里随机删一个商品，测试需要知道车里有什么。Basket 没有这样的方法，最简单的办法是<strong>加上</strong>。为测试加方法是个权衡，作者通常倾向于任何能让测试更容易的做法：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/Basket.java（为测试新增）"><pre>
+public int quantityOf(Product product) {
+  assert basket.containsKey(product);   // 这里也可以用更弱的前置条件：不在车里就返回 0
+  return basket.get(product);
+}
+
+public Set&lt;Product&gt; products() {
+  return Collections.unmodifiableSet(basket.keySet());   // 返回只读视图，不暴露内部集合
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="basket.py（为测试新增）"><pre>
+    def quantity_of(self, product: Product) -&gt; int:
+        assert product in self._basket
+        return self._basket[product]
+
+    def products(self) -&gt; frozenset[Product]:
+        return frozenset(self._basket)     # 返回不可变副本，不暴露内部 dict
+</pre></div>
+<div class="code" data-lang="ts" data-file="basket.ts（为测试新增）"><pre>
+  quantityOf(product: Product): number {
+    const entry = this.items.get(product.name);
+    invariant(entry, "product must be in the basket");
+    return entry.qty;
+  }
+
+  products(): Product[] {
+    return [...this.items.values()].map((e) =&gt; e.product);   // 返回副本
+  }
+</pre></div>
+</div>
+
+<p>然后定义两种「操作」，告诉框架怎么执行它们、执行后检查什么，再让框架随机拼出操作序列：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/BasketPBTest.java（jqwik Action）"><pre>
+public class BasketPBTest {
+
+  class AddAction implements Action&lt;Basket&gt; {
+    private final Product product;
+    private final int qty;
+
+    public AddAction(Product product, int qty) {   // 商品和数量由 jqwik 随机生成
+      this.product = product;
+      this.qty = qty;
+    }
+
+    @Override
+    public Basket run(Basket basket) {
+      BigDecimal currentValue = basket.getTotalValue();
+      basket.add(product, qty);
+
+      BigDecimal newProductValue = product.getPrice().multiply(valueOf(qty));
+      BigDecimal newValue = currentValue.add(newProductValue);
+      assertThat(basket.getTotalValue()).isEqualByComparingTo(newValue);
+      return basket;                               // 下一个操作从这个状态继续
+    }
+  }
+
+  class RemoveAction implements Action&lt;Basket&gt; {
+    @Override
+    public Basket run(Basket basket) {
+      BigDecimal currentValue = basket.getTotalValue();
+      Set&lt;Product&gt; productsInBasket = basket.products();
+      if (productsInBasket.isEmpty())              // 车是空的就跳过（序列是随机的）
+        return basket;
+
+      Product randomProduct = pickRandom(productsInBasket);
+      double currentProductQty = basket.quantityOf(randomProduct);
+      basket.remove(randomProduct);
+
+      BigDecimal basketValueWithoutRandomProduct = currentValue
+          .subtract(randomProduct.getPrice().multiply(valueOf(currentProductQty)));
+      assertThat(basket.getTotalValue())
+          .isEqualByComparingTo(basketValueWithoutRandomProduct);
+      return basket;
+    }
+    // pickRandom(...) 见仓库源码
+  }
+
+  static List&lt;Product&gt; randomProducts = new ArrayList&lt;&gt;() {{
+    add(new Product("TV", new BigDecimal("100")));
+    add(new Product("Playstation", new BigDecimal("150.3")));
+    add(new Product("Refrigerator", new BigDecimal("180.27")));
+    add(new Product("Soda", new BigDecimal("2.69")));
+  }};
+
+  private Arbitrary&lt;AddAction&gt; addAction() {
+    Arbitrary&lt;Product&gt; products = Arbitraries.oneOf(       // 从固定列表中随机挑商品
+        randomProducts.stream()
+            .map(product -&gt; Arbitraries.of(product))
+            .collect(Collectors.toList()));
+    Arbitrary&lt;Integer&gt; qtys = Arbitraries.integers().between(1, 100);
+    return Combinators.combine(products, qtys)
+        .as((product, qty) -&gt; new AddAction(product, qty));
+  }
+
+  private Arbitrary&lt;RemoveAction&gt; removeAction() {
+    return Arbitraries.of(new RemoveAction());
+  }
+
+  @Provide
+  Arbitrary&lt;ActionSequence&lt;Basket&gt;&gt; addsAndRemoves() {
+    return Arbitraries.sequences(Arbitraries.oneOf(addAction(), removeAction()));
+  }
+
+  @Property
+  void sequenceOfAddsAndRemoves(@ForAll("addsAndRemoves") ActionSequence&lt;Basket&gt; actions) {
+    actions.run(new Basket());
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_basket_stateful.py（Hypothesis 状态机）"><pre>
+from decimal import Decimal
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, rule, precondition
+from basket import Basket, Product
+
+PRODUCTS = [
+    Product("TV", Decimal("100")),
+    Product("Playstation", Decimal("150.3")),
+    Product("Refrigerator", Decimal("180.27")),
+    Product("Soda", Decimal("2.69")),
+]
+
+class BasketMachine(RuleBasedStateMachine):
+    """Hypothesis 会随机决定调用哪些 rule、调用几次、以什么顺序。"""
+
+    def __init__(self):
+        super().__init__()
+        self.basket = Basket()
+
+    @rule(product=st.sampled_from(PRODUCTS), qty=st.integers(1, 100))
+    def add(self, product, qty):
+        current = self.basket.total_value
+        self.basket.add(product, qty)
+        assert self.basket.total_value == current + product.price * qty
+
+    @precondition(lambda self: len(self.basket.products()) &gt; 0)   # 车是空的就不删
+    @rule(data=st.data())
+    def remove(self, data):
+        current = self.basket.total_value
+        in_basket = sorted(self.basket.products(), key=lambda p: p.name)
+        product = data.draw(st.sampled_from(in_basket))   # 用框架的随机源挑，可复现
+        qty = self.basket.quantity_of(product)
+
+        self.basket.remove(product)
+
+        assert self.basket.total_value == current - product.price * qty
+
+# 让 pytest 发现并运行这个状态机
+TestBasket = BasketMachine.TestCase
+</pre></div>
+<div class="code" data-lang="ts" data-file="basket.stateful.test.ts（fast-check 命令）"><pre>
+import { test, expect } from "vitest";
+import fc from "fast-check";
+import { Basket, Product } from "./basket";
+
+const PRODUCTS: Product[] = [
+  { name: "TV", priceInCents: 10000 },
+  { name: "Playstation", priceInCents: 15030 },
+  { name: "Refrigerator", priceInCents: 18027 },
+  { name: "Soda", priceInCents: 269 },
+];
+
+type Model = object;   // 这里不需要额外的模型，直接检查真实对象
+
+class AddCommand implements fc.Command&lt;Model, Basket&gt; {
+  constructor(readonly product: Product, readonly qty: number) {}
+  check = () =&gt; true;
+  run(_m: Model, basket: Basket) {
+    const current = basket.totalValueInCents;
+    basket.add(this.product, this.qty);
+    expect(basket.totalValueInCents).toBe(current + this.product.priceInCents * this.qty);
+  }
+  toString = () =&gt; `add(${this.product.name}, ${this.qty})`;
+}
+
+class RemoveCommand implements fc.Command&lt;Model, Basket&gt; {
+  constructor(readonly pick: number) {}         // 用生成的数字挑商品，保证可复现
+  check = () =&gt; true;
+  run(_m: Model, basket: Basket) {
+    const inBasket = basket.products();
+    if (inBasket.length === 0) return;          // 车是空的就跳过
+    const product = inBasket[this.pick % inBasket.length];
+    const current = basket.totalValueInCents;
+    const qty = basket.quantityOf(product);
+
+    basket.remove(product);
+
+    expect(basket.totalValueInCents).toBe(current - product.priceInCents * qty);
+  }
+  toString = () =&gt; `remove(#${this.pick})`;
+}
+
+const allCommands = [
+  fc.tuple(fc.constantFrom(...PRODUCTS), fc.integer({ min: 1, max: 100 }))
+    .map(([p, q]) =&gt; new AddCommand(p, q)),
+  fc.nat().map((i) =&gt; new RemoveCommand(i)),
+];
+
+test("sequence of adds and removes", () =&gt; {
+  fc.assert(fc.property(fc.commands(allCommands), (cmds) =&gt; {
+    fc.modelRun(() =&gt; ({ model: {}, real: new Basket() }), cmds);
+  }));
+});
+</pre></div>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 随机性要交给框架</div>
+  <p>
+    仓库里 Java 版的 <code>pickRandom</code> 用的是 <code>new Random()</code>，这意味着即使 jqwik 用同一个种子重放，挑中的商品也可能不同，失败就不一定能复现。
+    Python 版用 <code>data.draw(...)</code>、TypeScript 版把「挑第几个」也作为生成的参数，<strong>所有随机性都来自框架</strong>，失败时就能稳定重放，而且框架还能对它做收缩。
+  </p>
+</div>
+
+<p>
+  这是一个又长又复杂的属性测试。值得吗？作者坦言，对<em>这个</em> Basket 实现，他大概会写一组彻底的例子测试。但这个例子展示了属性测试的威力：
+  虽然往往比例子测试复杂，但你会逐渐习惯，很快就能写得又快又好。
+</p>
+
+<h2 id="complex">例 5：生成复杂的领域对象</h2>
+
+<p>测试业务系统时，经常需要生成复杂的对象。比如一个 Book 类：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="把三个简单的生成器组合成一个 Book 生成器">
+  <rect class="bx-b" x="20" y="20" width="230" height="36" rx="8"/>
+  <text class="mono on-b" x="135" y="43" text-anchor="middle">title：a–z，长度 10–100</text>
+  <rect class="bx-b" x="20" y="66" width="230" height="36" rx="8"/>
+  <text class="mono on-b" x="135" y="89" text-anchor="middle">author：a–z，长度 5–21</text>
+  <rect class="bx-b" x="20" y="112" width="230" height="36" rx="8"/>
+  <text class="mono on-b" x="135" y="135" text-anchor="middle">pages：0–450</text>
+  <path class="ln" d="M252 38 L320 76" marker-end="url(#ar)"/>
+  <path class="ln" d="M252 84 H320" marker-end="url(#ar)"/>
+  <path class="ln" d="M252 130 L320 92" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="324" y="56" width="150" height="56" rx="10"/>
+  <text class="ttl on-a" x="399" y="80" text-anchor="middle">combine</text>
+  <text class="sm" x="399" y="98" text-anchor="middle">组合成一个对象</text>
+  <path class="ln" d="M476 84 H520" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="524" y="34" width="216" height="100" rx="10"/>
+  <text class="ttl on-g" x="632" y="58" text-anchor="middle">Arbitrary&lt;Book&gt;</text>
+  <text class="mono" x="540" y="82">Book("qwhdkslaje…",</text>
+  <text class="mono" x="540" y="100">     "mfkqo", 213)</text>
+  <text class="sm" x="540" y="122">每次运行都是不同的书</text>
+</svg>
+<figcaption>图 5-6　用组合子把简单生成器拼成复杂对象的生成器</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/BookTest.java（Combinators）"><pre>
+public class BookTest {
+
+  @Property
+  void differentBooks(@ForAll("books") Book book) {
+    System.out.println(book);   // 每次都是不同的书！
+    // 在这里写你的测试
+  }
+
+  @Provide
+  Arbitrary&lt;Book&gt; books() {
+    Arbitrary&lt;String&gt; titles = Arbitraries.strings().withCharRange('a', 'z')
+        .ofMinLength(10).ofMaxLength(100);
+    Arbitrary&lt;String&gt; authors = Arbitraries.strings().withCharRange('a', 'z')
+        .ofMinLength(5).ofMaxLength(21);
+    Arbitrary&lt;Integer&gt; qtyOfPages = Arbitraries.integers().between(0, 450);
+
+    return Combinators.combine(titles, authors, qtyOfPages)
+        .as((title, author, pages) -&gt; new Book(title, author, pages));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_book.py（st.builds）"><pre>
+import string
+from dataclasses import dataclass
+from hypothesis import given, strategies as st
+
+@dataclass(frozen=True)
+class Book:
+    title: str
+    author: str
+    qty_of_pages: int
+
+lower = string.ascii_lowercase
+books = st.builds(                 # 按字段把策略组合成对象
+    Book,
+    title=st.text(alphabet=lower, min_size=10, max_size=100),
+    author=st.text(alphabet=lower, min_size=5, max_size=21),
+    qty_of_pages=st.integers(0, 450),
+)
+
+@given(books)
+def test_different_books(book):
+    print(book)                    # 每次都是不同的书！
+    # 在这里写你的测试
+</pre></div>
+<div class="code" data-lang="ts" data-file="book.test.ts（fc.record）"><pre>
+import { test } from "vitest";
+import fc from "fast-check";
+
+interface Book { title: string; author: string; qtyOfPages: number }
+
+const lowerString = (minLength: number, maxLength: number) =&gt;
+  fc.string({ unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), minLength, maxLength });
+
+const books: fc.Arbitrary&lt;Book&gt; = fc.record({   // 按字段把 arbitrary 组合成对象
+  title: lowerString(10, 100),
+  author: lowerString(5, 21),
+  qtyOfPages: fc.integer({ min: 0, max: 450 }),
+});
+
+test("different books", () =&gt; {
+  fc.assert(fc.property(books, (book) =&gt; {
+    console.log(book);             // 每次都是不同的书！
+    // 在这里写你的测试
+  }));
+});
+</pre></div>
+</div>
+
+<p>你几乎可以生成任何对象。还可以更进一步生成<strong>更真实</strong>的数据：比如不用随机字母当作者名，而是返回真实的人名。试着自己实现这样一个生成器。</p>
+
+<h2 id="real-world">现实中的属性测试</h2>
+
+<h3>例子测试 vs 属性测试</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="作者的做法：先用例子测试做规格测试和结构化测试，理解程序后再挑出适合改写为属性测试的用例">
+  <rect class="bx-b" x="20" y="40" width="200" height="64" rx="10"/>
+  <text class="ttl on-b" x="120" y="66" text-anchor="middle">规格测试 + 结构化测试</text>
+  <text class="sm" x="120" y="86" text-anchor="middle">用例子测试，简单、专注于理解需求</text>
+  <path class="ln" d="M222 72 H270" marker-end="url(#ar)"/>
+  <rect class="bx" x="274" y="40" width="200" height="64" rx="10"/>
+  <text class="ttl" x="374" y="66" text-anchor="middle">对程序有了深入理解</text>
+  <text class="sm" x="374" y="86" text-anchor="middle">哪些用例我还不放心？</text>
+  <path class="ln" d="M476 72 H524" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="528" y="40" width="212" height="64" rx="10"/>
+  <text class="ttl on-p" x="634" y="66" text-anchor="middle">挑出来改写成属性测试</text>
+  <text class="sm" x="634" y="86" text-anchor="middle">只在例子测试可能不够时</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">两者混用，而不是二选一</text>
+</svg>
+<figcaption>图 5-7　作者如何把属性测试融入测试流程</figcaption>
+</figure>
+
+<p>
+  属性测试看起来更「高级」，对输入空间的探索也更好。那以后只写属性测试？作者在实践中<strong>两者混用</strong>。
+  做规格测试和结构化测试时用例子测试 —— 它更简单，自动化时需要的创造力更少，让人能专注于理解需求、设计更好的用例。
+  两种技术都做完、对程序理解透彻之后，再评估哪些用例更适合写成属性测试。
+  他并不总写属性测试：很多问题用例子测试就足够有信心了，只有当<strong>不完全确定例子测试够不够</strong>时，才会用属性测试。
+</p>
+
+<h3>三个常见陷阱</h3>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#9203;</span><h4>1. 要求生成昂贵甚至不可能的数据</h4><p>「100 个互不相同、同时是 2、3、5、15 的倍数的数」很难靠随机找到；「10 个不重复元素，取值范围只有 2–8」根本不可能。框架生成数据要很久？换一种生成方式，或者换一种写法。</p></div>
+  <div class="card"><span class="ic">&#128207;</span><h4>2. 边界表达错了</h4><p>边界是 Bug 的温床，要确保属性的边界表达正确。比如 <code>lessThan(1f)</code> 和 <code>greaterThan(10f)</code>，框架会尽力生成最接近 1 的数、最小的 float……前提是你把边界写对了。</p></div>
+  <div class="card"><span class="ic">&#9878;</span><h4>3. 输入分布不均</h4><p>框架本身会生成均匀分布的数据，但测试里对数据的加工可能破坏这一点。典型例子就是下面的三角形。</p></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/Triangle.java"><pre>
+public class Triangle {
+  public static boolean isTriangle(int a, int b, int c) {
+    boolean hasABadSide = a &gt;= (b + c) || c &gt;= (b + a) || b &gt;= (a + c);
+    return !hasABadSide;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="triangle.py"><pre>
+def is_triangle(a: int, b: int, c: int) -&gt; bool:
+    has_a_bad_side = a &gt;= b + c or c &gt;= b + a or b &gt;= a + c
+    return not has_a_bad_side
+</pre></div>
+<div class="code" data-lang="ts" data-file="triangle.ts"><pre>
+export function isTriangle(a: number, b: number, c: number): boolean {
+  const hasABadSide = a &gt;= b + c || c &gt;= b + a || b &gt;= a + c;
+  return !hasABadSide;
+}
+</pre></div>
+</div>
+
+<p>要表达两条属性：合法三角形和非法三角形。如果直接生成三个随机整数，它们能组成合法三角形的概率很低：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="三个随机整数大多组成非法三角形，拆成两个测试分别生成合法与非法三角形才能均衡">
+  <text class="ttl" x="20" y="24">三个 [0,100] 的随机整数（示意比例）</text>
+  <rect x="20" y="36" width="560" height="30" rx="4" style="fill:var(--red-bg);stroke:var(--red)"/>
+  <rect x="580" y="36" width="160" height="30" rx="4" style="fill:var(--green-bg);stroke:var(--green)"/>
+  <text class="lbl on-r" x="300" y="56" text-anchor="middle">大多数：非法三角形</text>
+  <text class="lbl on-g" x="660" y="56" text-anchor="middle">少数合法</text>
+
+  <text class="ttl" x="20" y="102">拆成两个测试，各用自己的生成器</text>
+  <rect x="20" y="114" width="355" height="30" rx="4" style="fill:var(--red-bg);stroke:var(--red)"/>
+  <rect x="385" y="114" width="355" height="30" rx="4" style="fill:var(--green-bg);stroke:var(--green)"/>
+  <text class="lbl on-r" x="197" y="134" text-anchor="middle">只生成非法三角形</text>
+  <text class="lbl on-g" x="562" y="134" text-anchor="middle">只生成合法三角形</text>
+  <text class="sm" x="380" y="162" text-anchor="middle">两条属性都被充分检验</text>
+</svg>
+<figcaption>图 5-8　不要让一条属性「饿死」另一条</figcaption>
+</figure>
+
+<p>最简单的办法是拆成两个测试，一个只生成合法三角形，一个只生成非法三角形。仓库里的 Java 版用 <code>filter</code> 过滤；Python 和 TypeScript 版我们换一种更高效的方式 —— <strong>直接构造</strong>，而不是生成后再筛掉大部分：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/TriangleTest.java"><pre>
+@Property
+void triangleIsInvalidIfOneSideIsBiggerThanOthers(@ForAll("invalidTrianglesGenerator") ABC abc) {
+  assertThat(Triangle.isTriangle(abc.a, abc.b, abc.c)).isFalse();
+}
+
+@Provide
+Arbitrary&lt;ABC&gt; invalidTrianglesGenerator() {
+  Arbitrary&lt;Integer&gt; normalSide1 = Arbitraries.integers();
+  Arbitrary&lt;Integer&gt; normalSide2 = Arbitraries.integers();
+  Arbitrary&lt;Integer&gt; biggerSide = Arbitraries.integers();
+  Arbitrary&lt;ABC&gt; biggerA = Combinators.combine(normalSide1, normalSide2, biggerSide).as(ABC::new)
+      .filter(k -&gt; k.a &gt;= k.b + k.c);
+  Arbitrary&lt;ABC&gt; biggerB = Combinators.combine(normalSide1, normalSide2, biggerSide).as(ABC::new)
+      .filter(k -&gt; k.b &gt;= k.a + k.c);
+  Arbitrary&lt;ABC&gt; biggerC = Combinators.combine(normalSide1, normalSide2, biggerSide).as(ABC::new)
+      .filter(k -&gt; k.c &gt;= k.a + k.b);
+  return Arbitraries.oneOf(biggerA, biggerB, biggerC);    // 哪条边太长，三种情况均匀
+}
+
+@Property
+void triangleIsValidOtherwise(@ForAll("validTriangleGenerator") ABC abc) {
+  assertThat(Triangle.isTriangle(abc.a, abc.b, abc.c)).isTrue();
+}
+
+@Provide
+Arbitrary&lt;ABC&gt; validTriangleGenerator() {
+  Arbitrary&lt;Integer&gt; side = Arbitraries.integers();
+  return Combinators.combine(side, side, side).as(ABC::new)
+      .filter(k -&gt; (k.a &lt; k.b + k.c) &amp;&amp; (k.b &lt; k.a + k.c) &amp;&amp; (k.c &lt; k.a + k.b));
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_triangle.py"><pre>
+from hypothesis import given, strategies as st
+from triangle import is_triangle
+
+sides = st.integers(min_value=1, max_value=1000)
+
+@st.composite
+def invalid_triangles(draw):
+    b, c = draw(sides), draw(sides)
+    too_long = b + c + draw(st.integers(0, 1000))     # 这条边 ≥ 另两边之和
+    a, b, c = draw(st.permutations([too_long, b, c]))  # 哪条边太长，随机
+    return a, b, c
+
+@st.composite
+def valid_triangles(draw):
+    b, c = draw(sides), draw(sides)
+    a = draw(st.integers(abs(b - c) + 1, b + c - 1))   # 严格介于 |b-c| 和 b+c 之间
+    return tuple(draw(st.permutations([a, b, c])))
+
+@given(invalid_triangles())
+def test_triangle_is_invalid_if_one_side_is_bigger_than_others(abc):
+    assert is_triangle(*abc) is False
+
+@given(valid_triangles())
+def test_triangle_is_valid_otherwise(abc):
+    assert is_triangle(*abc) is True
+</pre></div>
+<div class="code" data-lang="ts" data-file="triangle.test.ts"><pre>
+import { test, expect } from "vitest";
+import fc from "fast-check";
+import { isTriangle } from "./triangle";
+
+const side = fc.integer({ min: 1, max: 1000 });
+
+const invalidTriangles = fc
+  .tuple(side, side, fc.integer({ min: 0, max: 1000 }))
+  .chain(([b, c, extra]) =&gt;                             // 这条边 ≥ 另两边之和
+    fc.shuffledSubarray([b + c + extra, b, c], { minLength: 3 }));
+
+const validTriangles = fc
+  .tuple(side, side)
+  .chain(([b, c]) =&gt; fc
+    .integer({ min: Math.abs(b - c) + 1, max: b + c - 1 }) // 严格介于 |b-c| 和 b+c 之间
+    .chain((a) =&gt; fc.shuffledSubarray([a, b, c], { minLength: 3 })));
+
+test("triangle is invalid if one side is bigger than others", () =&gt; {
+  fc.assert(fc.property(invalidTriangles, ([a, b, c]) =&gt; {
+    expect(isTriangle(a, b, c)).toBe(false);
+  }));
+});
+
+test("triangle is valid otherwise", () =&gt; {
+  fc.assert(fc.property(validTriangles, ([a, b, c]) =&gt; {
+    expect(isTriangle(a, b, c)).toBe(true);
+  }));
+});
+</pre></div>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 过滤太多，框架会抗议</div>
+  <p>
+    Java 版的 filter 会扔掉大量生成的数据（三个完全随机的 int 恰好满足条件的比例不高），生成就会变慢。Hypothesis 遇到这种情况会直接报 <code>FailedHealthCheck</code> 提醒你「过滤得太多了」。
+    能构造就别过滤 —— 这正是陷阱 1 的一个实例。
+  </p>
+</div>
+
+<h3>创造力是关键</h3>
+<p>写属性测试需要大量创造力：想办法表达属性、生成随机数据、在不知道具体输入的情况下断言期望行为 —— 都不容易。它比例子测试需要更多练习。尽早动手吧，希望本章的例子给了你一些灵感！</p>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>在属性测试中，我们不去想具体的例子，而是表达方法应该满足的属性，由框架随机生成成百上千个输入。</li>
+  <li>属性测试不能取代规格测试和结构化测试，它是你工具箱里的又一件工具。有时传统的例子测试就够了。</li>
+  <li>写属性测试需要创造力：巧妙地生成数据、处理断言，并确保分区被均衡地检验。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>5.1　例子测试和属性测试的主要区别是什么？</summary>
+<p>例子测试使用（通常无穷多种可能中的）一个具体实例；属性测试定义需要成立的属性，由框架生成随机输入，寻找能打破该属性的输入。</p></details>
+
+<details class="quiz"><summary>5.2　一个方法判断字符串是否为回文（正读反读都一样）。你能想到哪些属性？怎么实现？</summary>
+<p>两条属性：回文返回 true，非回文返回 false。</p>
+<ul>
+  <li><strong>回文：</strong>生成随机字符串 s，拼接 <code>s + reverse(s)</code>，应返回 true。别忘了<strong>奇数长度</strong>的回文：<code>s + X + reverse(s)</code>（X 为任意字符）—— 这是一个值得测的边界。</li>
+  <li><strong>非回文：</strong>生成随机字符串后，加入一些与生成它的字符<strong>不同</strong>的随机字母，确保它不是回文；否则随机生成可能碰巧造出回文，让测试误报。</li>
+</ul>
+<div class="langs">
+<div class="code" data-lang="python"><pre>
+@given(st.text(alphabet="abc"), st.one_of(st.just(""), st.sampled_from("abc")))
+def test_palindromes(s, middle):
+    assert is_palindrome(s + middle + s[::-1])
+</pre></div>
+<div class="code" data-lang="ts"><pre>
+test("palindromes", () =&gt; {
+  fc.assert(fc.property(
+    fc.string(), fc.constantFrom("", "a", "b"),
+    (s, middle) =&gt; {
+      expect(isPalindrome(s + middle + [...s].reverse().join(""))).toBe(true);
+    }));
+});
+</pre></div>
+</div></details>
+
+<details class="quiz"><summary>5.3　什么是模糊测试（fuzzing）？它和属性测试有什么区别？</summary>
+<p>模糊测试用无效的、意外的、随机的数据去运行程序，看它会不会崩溃。属性测试也生成随机数据，但目标始终是检验某条属性，测试在随机数据下应该<em>通过</em>；而模糊测试是不断尝试随机输入，直到程序崩溃。模糊测试是一个很大的研究领域，工具越来越聪明，推荐阅读 <em>The Fuzzing Book</em>。</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch5</code> 目录跑 <code>mvn test</code>。然后把 <code>PassingGrade</code> 的 <code>&gt;=</code> 改成 <code>&gt;</code>，看 jqwik 用了几次尝试找到 5.0。</li>
+    <li>在 <code>Basket.add</code> 里植入一个只在「同一商品第三次加入」时才出现的 Bug，看看 <code>BasketTest</code> 的三个例子测试能否发现，<code>BasketPBTest</code> 又能否发现。</li>
+    <li><code>BookTest</code> 里写着「在这里写你的测试」。为 Book 想一条属性（比如「页数永远非负」需要构造函数契约来保证吗？），把它写出来。</li>
+    <li>用 Hypothesis 或 fast-check 实现练习 5.2 的回文测试，并故意写一个忽略奇数长度的错误实现，看框架多快找到反例、收缩到多短。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

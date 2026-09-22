@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>附录 A · JUnit 5 入门 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="A">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">附录 A</span>
+<h1>JUnit 5 入门（以及 pytest 与 Vitest）</h1>
+<p class="lede">
+  书中所有测试都用 JUnit 5 + AssertJ 写成。如果你从没写过自动化测试，先读这一页：它用本仓库 <code>intro-to-junit</code> 目录里的小例子，
+  讲清楚一个测试长什么样、怎么运行、怎么读失败信息，以及每个测试前后的准备与清理、参数化测试。每一步都配有 pytest 和 Vitest 的对应写法。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 关于本附录</div>
+  <p>书的 PDF 附录只有习题答案（已整合进各章末尾的「自测练习」）。本页基于配套代码仓库中的 <code>intro-to-junit</code> 项目编写，作为读前几章前的热身。</p>
+</div>
+
+<div class="goals">
+  <h4>本页目标</h4>
+  <ul>
+    <li>搭好 Java / Python / TypeScript 的测试环境</li>
+    <li>写出第一个测试，看懂「准备—执行—断言」三段式</li>
+    <li>运行测试、读懂失败报告</li>
+    <li>用 <code>@BeforeEach</code> / fixture / <code>beforeEach</code> 消除重复</li>
+    <li>用参数化测试把一组相似的用例写成一张表</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="setup">搭建环境</h2>
+
+<div class="langs">
+<div class="code" data-lang="xml" data-file="Java：pom.xml 中的测试依赖（本仓库每一章都是独立的 Maven 项目）"><pre>
+&lt;dependencies&gt;
+  &lt;!-- 断言库：流畅、可读的 assertThat(...) --&gt;
+  &lt;dependency&gt;
+    &lt;groupId&gt;org.assertj&lt;/groupId&gt;
+    &lt;artifactId&gt;assertj-core&lt;/artifactId&gt;
+    &lt;version&gt;3.15.0&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+  &lt;/dependency&gt;
+  &lt;!-- JUnit 5 的测试引擎 --&gt;
+  &lt;dependency&gt;
+    &lt;groupId&gt;org.junit.jupiter&lt;/groupId&gt;
+    &lt;artifactId&gt;junit-jupiter-engine&lt;/artifactId&gt;
+    &lt;version&gt;5.6.2&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+  &lt;/dependency&gt;
+  &lt;!-- 参数化测试 --&gt;
+  &lt;dependency&gt;
+    &lt;groupId&gt;org.junit.jupiter&lt;/groupId&gt;
+    &lt;artifactId&gt;junit-jupiter-params&lt;/artifactId&gt;
+    &lt;version&gt;5.6.2&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+  &lt;/dependency&gt;
+&lt;/dependencies&gt;
+</pre></div>
+<div class="code" data-lang="bash" data-file="Python：pytest"><pre>
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install pytest
+# 约定：测试文件叫 test_*.py，测试函数叫 test_*，pytest 会自动发现它们
+</pre></div>
+<div class="code" data-lang="bash" data-file="TypeScript：Vitest"><pre>
+npm init -y
+npm i -D vitest typescript
+# 约定：测试文件叫 *.test.ts，Vitest 会自动发现它们
+</pre></div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="典型的项目结构：生产代码和测试代码分开存放">
+  <text class="ttl" x="130" y="22" text-anchor="middle">Java（Maven）</text>
+  <rect class="bx" x="20" y="34" width="220" height="120" rx="10"/>
+  <text class="mono" x="34" y="58">intro-to-junit/</text>
+  <text class="mono" x="46" y="78">pom.xml</text>
+  <text class="mono on-b" x="46" y="98">src/main/java/…  ← 生产代码</text>
+  <text class="mono on-g" x="46" y="118">src/test/java/…  ← 测试代码</text>
+  <text class="sm" x="46" y="140">包名相同，路径分开</text>
+
+  <text class="ttl" x="380" y="22" text-anchor="middle">Python</text>
+  <rect class="bx" x="270" y="34" width="220" height="120" rx="10"/>
+  <text class="mono" x="284" y="58">project/</text>
+  <text class="mono on-b" x="296" y="78">block_counter.py</text>
+  <text class="mono on-g" x="296" y="98">tests/</text>
+  <text class="mono on-g" x="308" y="118">test_block_counter.py</text>
+  <text class="sm" x="296" y="140">也常见 src/ 布局</text>
+
+  <text class="ttl" x="630" y="22" text-anchor="middle">TypeScript</text>
+  <rect class="bx" x="520" y="34" width="220" height="120" rx="10"/>
+  <text class="mono" x="534" y="58">project/</text>
+  <text class="mono" x="546" y="78">package.json</text>
+  <text class="mono on-b" x="546" y="98">src/blockCounter.ts</text>
+  <text class="mono on-g" x="546" y="118">src/blockCounter.test.ts</text>
+  <text class="sm" x="546" y="140">测试文件常和源文件放一起</text>
+</svg>
+<figcaption>图 A-1　三种生态的典型目录结构</figcaption>
+</figure>
+
+<h2 id="first">第一个测试</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：maxBlock</div>
+  <p>给定一个字符串，返回其中最长的「块」的长度。块是由相同字符组成的连续序列。例如 <code>"aabbbcc"</code> 的最长块是 <code>"bbb"</code>，返回 3；空字符串返回 0。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="intro-to-junit/…/BlockCounter.java"><pre>
+public class BlockCounter {
+
+  public int maxBlock(String str) {
+    if (str.isEmpty())
+      return 0;
+
+    int largestBlockSize = 1;
+    int currentBlockSize = 1;
+    char lastChar = str.charAt(0);
+
+    for (int i = 1; i &lt; str.length(); i++) {
+      char currentChar = str.charAt(i);
+      // 和上一个字符相同，块变长；否则开始一个新块
+      currentBlockSize = (currentChar == lastChar ? currentBlockSize + 1 : 1);
+      lastChar = currentChar;
+      largestBlockSize = Math.max(largestBlockSize, currentBlockSize);
+    }
+    return largestBlockSize;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="block_counter.py"><pre>
+def max_block(s: str) -&gt; int:
+    if not s:
+        return 0
+
+    largest_block_size = 1
+    current_block_size = 1
+    last_char = s[0]
+
+    for current_char in s[1:]:
+        # 和上一个字符相同，块变长；否则开始一个新块
+        current_block_size = current_block_size + 1 if current_char == last_char else 1
+        last_char = current_char
+        largest_block_size = max(largest_block_size, current_block_size)
+    return largest_block_size
+</pre></div>
+<div class="code" data-lang="ts" data-file="blockCounter.ts"><pre>
+export function maxBlock(str: string): number {
+  if (str.length === 0) return 0;
+
+  let largestBlockSize = 1;
+  let currentBlockSize = 1;
+  let lastChar = str[0];
+
+  for (let i = 1; i &lt; str.length; i++) {
+    const currentChar = str[i];
+    // 和上一个字符相同，块变长；否则开始一个新块
+    currentBlockSize = currentChar === lastChar ? currentBlockSize + 1 : 1;
+    lastChar = currentChar;
+    largestBlockSize = Math.max(largestBlockSize, currentBlockSize);
+  }
+  return largestBlockSize;
+}
+</pre></div>
+</div>
+
+<p>一个测试几乎总是由三段组成：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="测试的三段式：准备、执行、断言">
+  <rect class="bx-b" x="20" y="30" width="220" height="90" rx="12"/>
+  <text class="ttl on-b" x="130" y="56" text-anchor="middle">① 准备（Arrange）</text>
+  <text class="sm" x="130" y="80" text-anchor="middle">创建被测对象、</text>
+  <text class="sm" x="130" y="96" text-anchor="middle">准备输入数据</text>
+  <path class="ln" d="M242 75 H276" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="280" y="30" width="200" height="90" rx="12"/>
+  <text class="ttl on-a" x="380" y="56" text-anchor="middle">② 执行（Act）</text>
+  <text class="sm" x="380" y="80" text-anchor="middle">调用被测方法，</text>
+  <text class="sm" x="380" y="96" text-anchor="middle">拿到结果</text>
+  <path class="ln" d="M482 75 H516" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="520" y="30" width="220" height="90" rx="12"/>
+  <text class="ttl on-g" x="630" y="56" text-anchor="middle">③ 断言（Assert）</text>
+  <text class="sm" x="630" y="80" text-anchor="middle">检查结果是否</text>
+  <text class="sm" x="630" y="96" text-anchor="middle">符合预期</text>
+  <text class="sm" x="380" y="148" text-anchor="middle">也叫 Given–When–Then。断言失败，测试就失败（红）；全部通过，测试就通过（绿）</text>
+</svg>
+<figcaption>图 A-2　测试的三段式</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="intro-to-junit/…/BlockCounterTest.java"><pre>
+import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class BlockCounterTest {
+
+  @Test                                              // 告诉 JUnit：这是一个测试方法
+  void oneLongestBlock() {
+    int blockSize = new BlockCounter().maxBlock("aabbbcc");   // 准备 + 执行
+    assertThat(blockSize).isEqualTo(3);                        // 断言
+  }
+
+  @Test
+  void twoLongestBlocks() {
+    int blockSize = new BlockCounter().maxBlock("aabbbccc");
+    assertThat(blockSize).isEqualTo(3);
+  }
+
+  @Test
+  void blockOfLength1() {
+    int blockSize = new BlockCounter().maxBlock("abc");
+    assertThat(blockSize).isEqualTo(1);
+  }
+
+  @Test
+  void singleBlock() {                               // 仓库注释：「这个测试找到了 Bug！」
+    int blockSize = new BlockCounter().maxBlock("aa");
+    assertThat(blockSize).isEqualTo(2);
+  }
+
+  @Test
+  void longestBlockIsTheLast() {
+    int blockSize = new BlockCounter().maxBlock("aabbbb");
+    assertThat(blockSize).isEqualTo(4);
+  }
+
+  @Test
+  void emptyString() {                               // 仓库注释：「找到了第二个 Bug」
+    int blockSize = new BlockCounter().maxBlock("");
+    assertThat(blockSize).isEqualTo(0);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_block_counter.py"><pre>
+from block_counter import max_block
+
+def test_one_longest_block():                    # 以 test_ 开头：pytest 会自动当作测试
+    block_size = max_block("aabbbcc")            # 准备 + 执行
+    assert block_size == 3                       # 断言
+
+def test_two_longest_blocks():
+    assert max_block("aabbbccc") == 3
+
+def test_block_of_length_1():
+    assert max_block("abc") == 1
+
+def test_single_block():                         # 仓库注释：「这个测试找到了 Bug！」
+    assert max_block("aa") == 2
+
+def test_longest_block_is_the_last():
+    assert max_block("aabbbb") == 4
+
+def test_empty_string():                         # 仓库注释：「找到了第二个 Bug」
+    assert max_block("") == 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="blockCounter.test.ts"><pre>
+import { test, expect } from "vitest";
+import { maxBlock } from "./blockCounter";
+
+test("one longest block", () =&gt; {                // test(名字, 函数)
+  const blockSize = maxBlock("aabbbcc");         // 准备 + 执行
+  expect(blockSize).toBe(3);                     // 断言
+});
+
+test("two longest blocks", () =&gt; { expect(maxBlock("aabbbccc")).toBe(3); });
+test("block of length 1", () =&gt; { expect(maxBlock("abc")).toBe(1); });
+test("single block", () =&gt; { expect(maxBlock("aa")).toBe(2); });           // 找到了 Bug！
+test("longest block is the last", () =&gt; { expect(maxBlock("aabbbb")).toBe(4); });
+test("empty string", () =&gt; { expect(maxBlock("")).toBe(0); });             // 找到了第二个 Bug
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; JUnit 自带断言 vs AssertJ</div>
+  <p>
+    JUnit 自己也有 <code>assertEquals(expected, actual)</code>，但参数顺序容易写反（写反了失败信息就会误导你）。
+    本书统一用 AssertJ 的 <code>assertThat(actual).isEqualTo(expected)</code>：读起来像句子，而且提供了大量专门的断言（集合、异常、字符串……）。
+    pytest 直接用 Python 的 <code>assert</code>，失败时会自动展示两边的值；Vitest 的 <code>expect(actual).toBe(expected)</code> 和 AssertJ 很像。
+  </p>
+</div>
+
+<h2 id="run">运行测试，读懂失败</h2>
+
+<div class="langs">
+<div class="code" data-lang="bash" data-file="Java"><pre>
+cd intro-to-junit
+mvn test                                  # 运行全部测试
+mvn test -Dtest=BlockCounterTest          # 只运行一个测试类
+mvn test -Dtest=BlockCounterTest#emptyString   # 只运行一个测试方法
+# 在 IntelliJ / Eclipse 里：点测试方法旁边的绿色三角形
+</pre></div>
+<div class="code" data-lang="bash" data-file="Python"><pre>
+pytest                                    # 运行全部测试
+pytest test_block_counter.py              # 只运行一个文件
+pytest -k empty_string                    # 只运行名字匹配的测试
+pytest -x                                 # 遇到第一个失败就停下
+</pre></div>
+<div class="code" data-lang="bash" data-file="TypeScript"><pre>
+npx vitest                                # 监听模式：改代码自动重跑
+npx vitest run                            # 运行一次（CI 里用这个）
+npx vitest run -t "empty string"          # 只运行名字匹配的测试
+</pre></div>
+</div>
+
+<p>
+  仓库里的注释说「这个测试找到了 Bug」「找到了第二个 Bug」。我们来重现一下：假设最初的实现是这样的（示意）——
+  只在块<em>结束</em>时才更新最大值，也没有处理空字符串：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="有 Bug 的版本（示意）"><pre>
+public int maxBlock(String str) {
+  int largestBlockSize = 1;
+  int currentBlockSize = 1;
+  char lastChar = str.charAt(0);              // Bug 2：空字符串会抛 StringIndexOutOfBoundsException
+
+  for (int i = 1; i &lt; str.length(); i++) {
+    char currentChar = str.charAt(i);
+    if (currentChar == lastChar) {
+      currentBlockSize++;
+    } else {
+      largestBlockSize = Math.max(largestBlockSize, currentBlockSize);   // 块结束时才更新
+      currentBlockSize = 1;
+    }
+    lastChar = currentChar;
+  }
+  return largestBlockSize;                    // Bug 1：忘了最后一个块
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="有 Bug 的版本（示意）"><pre>
+def max_block(s: str) -&gt; int:
+    largest_block_size = 1
+    current_block_size = 1
+    last_char = s[0]                          # Bug 2：空字符串会抛 IndexError
+
+    for current_char in s[1:]:
+        if current_char == last_char:
+            current_block_size += 1
+        else:
+            largest_block_size = max(largest_block_size, current_block_size)   # 块结束时才更新
+            current_block_size = 1
+        last_char = current_char
+    return largest_block_size                 # Bug 1：忘了最后一个块
+</pre></div>
+<div class="code" data-lang="ts" data-file="有 Bug 的版本（示意）"><pre>
+export function maxBlock(str: string): number {
+  let largestBlockSize = 1;                   // Bug 2：空字符串会返回 1 而不是 0
+  let currentBlockSize = 1;
+  let lastChar = str[0];
+
+  for (let i = 1; i &lt; str.length; i++) {
+    const currentChar = str[i];
+    if (currentChar === lastChar) {
+      currentBlockSize++;
+    } else {
+      largestBlockSize = Math.max(largestBlockSize, currentBlockSize);   // 块结束时才更新
+      currentBlockSize = 1;
+    }
+    lastChar = currentChar;
+  }
+  return largestBlockSize;                    // Bug 1：忘了最后一个块
+}
+</pre></div>
+</div>
+
+<p>跑测试，<code>singleBlock</code>（"aa"）、<code>longestBlockIsTheLast</code>（"aabbbb"）和 <code>emptyString</code>（""）都会变红。失败报告大概是这样：</p>
+
+<div class="langs">
+<div class="code" data-lang="text" data-file="JUnit + AssertJ 的失败报告"><pre>
+[ERROR] Tests run: 6, Failures: 2, Errors: 1, Skipped: 0 &lt;&lt;&lt; FAILURE! - in appendix.BlockCounterTest
+[ERROR] appendix.BlockCounterTest.singleBlock  &lt;&lt;&lt; FAILURE!
+org.opentest4j.AssertionFailedError:
+Expecting:
+ &lt;1&gt;
+to be equal to:
+ &lt;2&gt;
+but was not.
+[ERROR] appendix.BlockCounterTest.longestBlockIsTheLast  &lt;&lt;&lt; FAILURE!
+[ERROR] appendix.BlockCounterTest.emptyString  &lt;&lt;&lt; ERROR!
+java.lang.StringIndexOutOfBoundsException: Index 0 out of bounds for length 0
+</pre></div>
+<div class="code" data-lang="text" data-file="pytest 的失败报告"><pre>
+    def test_single_block():
+&gt;       assert max_block("aa") == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = max_block('aa')
+
+FAILED test_block_counter.py::test_single_block - AssertionError: assert 1 == 2
+FAILED test_block_counter.py::test_longest_block_is_the_last - AssertionError: assert 2 == 4
+FAILED test_block_counter.py::test_empty_string - IndexError: string index out of range
+</pre></div>
+<div class="code" data-lang="text" data-file="Vitest 的失败报告"><pre>
+ FAIL  blockCounter.test.ts &gt; single block
+AssertionError: expected 1 to be 2 // Object.is equality
+- Expected
++ Received
+- 2
++ 1
+ Test Files  1 failed (1)
+      Tests  3 failed | 3 passed (6)
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 失败（failure）和错误（error）</div>
+  <p>JUnit 区分两者：<strong>失败</strong>是断言不成立（期望 2 实际 1）；<strong>错误</strong>是测试执行过程中抛出了意料之外的异常（比如越界）。两者都说明有问题，但错误往往意味着程序在更早的地方就崩了。</p>
+</div>
+
+<h2 id="lifecycle">每个测试前后：准备与清理</h2>
+
+<p>上面每个测试都 <code>new BlockCounter()</code>，有点重复。JUnit 提供了<strong>生命周期注解</strong>，让你在测试前后执行代码：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="JUnit 测试生命周期：BeforeAll 一次，每个测试前 BeforeEach，每个测试后 AfterEach，最后 AfterAll 一次">
+  <rect class="bx-p" x="20" y="80" width="110" height="50" rx="10"/>
+  <text class="lbl on-p" x="75" y="102" text-anchor="middle">@BeforeAll</text>
+  <text class="sm" x="75" y="120" text-anchor="middle">整个类一次</text>
+  <path class="ln" d="M132 105 H156" marker-end="url(#ar)"/>
+  <rect class="bx-d" x="160" y="20" width="440" height="170" rx="12"/>
+  <text class="sm" x="176" y="40">对每一个测试方法重复：</text>
+  <rect class="bx-b" x="180" y="80" width="120" height="50" rx="10"/>
+  <text class="lbl on-b" x="240" y="102" text-anchor="middle">@BeforeEach</text>
+  <text class="sm" x="240" y="120" text-anchor="middle">准备新鲜的对象</text>
+  <path class="ln" d="M302 105 H326" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="330" y="80" width="110" height="50" rx="10"/>
+  <text class="lbl on-a" x="385" y="110" text-anchor="middle">@Test</text>
+  <path class="ln" d="M442 105 H466" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="470" y="80" width="116" height="50" rx="10"/>
+  <text class="lbl on-g" x="528" y="102" text-anchor="middle">@AfterEach</text>
+  <text class="sm" x="528" y="120" text-anchor="middle">清理</text>
+  <path class="ln-d" d="M528 132 V160 H240 V134" marker-end="url(#ar)"/>
+  <text class="sm" x="384" y="176" text-anchor="middle">下一个测试</text>
+  <path class="ln" d="M602 105 H626" marker-end="url(#ar)"/>
+  <rect class="bx-p" x="630" y="80" width="110" height="50" rx="10"/>
+  <text class="lbl on-p" x="685" y="102" text-anchor="middle">@AfterAll</text>
+  <text class="sm" x="685" y="120" text-anchor="middle">整个类一次</text>
+</svg>
+<figcaption>图 A-3　测试生命周期。pytest 用 fixture（yield 前后）表达同样的事；Vitest 有 beforeAll / beforeEach / afterEach / afterAll</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="intro-to-junit/…/BlockCounterWithBeforeAndAfterTest.java"><pre>
+public class BlockCounterWithBeforeAndAfterTest {
+
+  private BlockCounter blockCounter;
+
+  @BeforeEach                          // 每个 @Test 之前都会执行
+  void setup() {
+    this.blockCounter = new BlockCounter();
+  }
+
+  @Test
+  void oneLongestBlock() {
+    int blockSize = blockCounter.maxBlock("aabbbcc");
+    assertThat(blockSize).isEqualTo(3);
+  }
+
+  @Test
+  void emptyString() {
+    int blockSize = blockCounter.maxBlock("");
+    assertThat(blockSize).isEqualTo(0);
+  }
+  // ……其余测试同理
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_block_counter_fixture.py"><pre>
+import pytest
+
+class BlockCounter:                    # 假设有一个类版本，便于演示 fixture
+    def max_block(self, s: str) -&gt; int:
+        return max_block(s)
+
+@pytest.fixture                        # 每个用到它的测试都会拿到一个新实例
+def block_counter():
+    counter = BlockCounter()
+    yield counter                      # yield 之前 = 准备；之后 = 清理（这里没什么可清理）
+
+def test_one_longest_block(block_counter):   # 参数名和 fixture 同名，pytest 自动注入
+    assert block_counter.max_block("aabbbcc") == 3
+
+def test_empty_string(block_counter):
+    assert block_counter.max_block("") == 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="blockCounter.lifecycle.test.ts"><pre>
+import { beforeEach, test, expect } from "vitest";
+
+class BlockCounter {                   // 假设有一个类版本，便于演示 beforeEach
+  maxBlock(str: string) { return maxBlock(str); }
+}
+
+let blockCounter: BlockCounter;
+
+beforeEach(() =&gt; {                     // 每个 test 之前都会执行
+  blockCounter = new BlockCounter();
+});
+
+test("one longest block", () =&gt; {
+  expect(blockCounter.maxBlock("aabbbcc")).toBe(3);
+});
+
+test("empty string", () =&gt; {
+  expect(blockCounter.maxBlock("")).toBe(0);
+});
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 其实 JUnit 默认就会给每个测试一个新实例</div>
+  <p>JUnit 5 默认为<strong>每个测试方法</strong>创建一个新的测试类实例，所以直接写 <code>private BlockCounter blockCounter = new BlockCounter();</code> 效果也一样（第 2、6 章的测试就是这么写的）。<code>@BeforeEach</code> 在准备工作比较复杂、或需要抛受检异常时更有用；<code>@AfterEach</code> 则用于关闭连接、删除文件等清理工作（第 9 章）。</p>
+</div>
+
+<h2 id="parameterized">参数化测试</h2>
+
+<p>六个测试的结构一模一样，只是输入和期望输出不同。<strong>参数化测试</strong>把它们写成一张表，测试逻辑只写一次：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="参数化测试：一张输入输出表驱动同一个测试骨架运行多次">
+  <rect class="bx-b" x="20" y="20" width="220" height="140" rx="10"/>
+  <text class="ttl on-b" x="130" y="44" text-anchor="middle">数据表</text>
+  <text class="mono" x="60" y="70">"aabbbcc"  → 3</text>
+  <text class="mono" x="60" y="88">"aabbbccc" → 3</text>
+  <text class="mono" x="60" y="106">"abc"      → 1</text>
+  <text class="mono" x="60" y="124">"aa"       → 2</text>
+  <text class="mono" x="60" y="142">…</text>
+  <path class="ln" d="M242 90 H316" marker-end="url(#ar)"/>
+  <text class="sm" x="279" y="80" text-anchor="middle">每一行</text>
+  <rect class="bx-a" x="320" y="40" width="200" height="100" rx="10"/>
+  <text class="ttl on-a" x="420" y="66" text-anchor="middle">测试骨架（只写一次）</text>
+  <text class="mono" x="420" y="94" text-anchor="middle">maxBlock(input)</text>
+  <text class="mono" x="420" y="114" text-anchor="middle">== expected</text>
+  <path class="ln" d="M522 90 H576" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="580" y="20" width="160" height="140" rx="10"/>
+  <text class="ttl on-g" x="660" y="44" text-anchor="middle">6 个独立的结果</text>
+  <text class="sm on-g" x="660" y="70" text-anchor="middle">✔ [1] aabbbcc, 3</text>
+  <text class="sm on-g" x="660" y="88" text-anchor="middle">✔ [2] aabbbccc, 3</text>
+  <text class="sm on-g" x="660" y="106" text-anchor="middle">✔ [3] abc, 1</text>
+  <text class="sm on-r" x="660" y="124" text-anchor="middle">✘ [4] aa, 2</text>
+  <text class="sm" x="660" y="142" text-anchor="middle">哪一行失败一目了然</text>
+</svg>
+<figcaption>图 A-4　参数化测试：数据与逻辑分离</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="intro-to-junit/…/BlockCounterParameterizedTest.java（@CsvSource）"><pre>
+public class BlockCounterParameterizedTest {
+
+  @ParameterizedTest
+  @CsvSource({                         // 每行一个用例，逗号分隔各个参数
+      "aabbbcc,3",
+      "aabbbccc,3",
+      "abc,1",
+      "aa,2",
+      "aabbbb,4",
+      "'',0"                           // 空字符串要写成 ''
+  })
+  void countTheNumberOfMaxBlocks(String input, int expectedOutput) {
+    int blockSize = new BlockCounter().maxBlock(input);
+    assertThat(blockSize).isEqualTo(expectedOutput);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_block_counter_parametrized.py"><pre>
+import pytest
+from block_counter import max_block
+
+@pytest.mark.parametrize("input_str, expected_output", [   # 每个元组一个用例
+    ("aabbbcc", 3),
+    ("aabbbccc", 3),
+    ("abc", 1),
+    ("aa", 2),
+    ("aabbbb", 4),
+    ("", 0),
+])
+def test_count_the_number_of_max_blocks(input_str, expected_output):
+    assert max_block(input_str) == expected_output
+</pre></div>
+<div class="code" data-lang="ts" data-file="blockCounter.parameterized.test.ts"><pre>
+import { test, expect } from "vitest";
+import { maxBlock } from "./blockCounter";
+
+test.each([                            // 每个数组一个用例
+  ["aabbbcc", 3],
+  ["aabbbccc", 3],
+  ["abc", 1],
+  ["aa", 2],
+  ["aabbbb", 4],
+  ["", 0],
+])("maxBlock(%j) = %i", (input, expectedOutput) =&gt; {   // %j、%i 会被替换成参数，出现在报告里
+  expect(maxBlock(input)).toBe(expectedOutput);
+});
+</pre></div>
+</div>
+
+<p>数据更复杂时（比如要传列表或对象），CSV 写不下了。JUnit 的 <code>@MethodSource</code> 让一个方法返回参数流 —— 第 2 章的 add() 就用了它：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="intro-to-junit/…/BlockCounterParameterizedTest2.java（@MethodSource）"><pre>
+public class BlockCounterParameterizedTest2 {
+
+  @ParameterizedTest
+  @MethodSource("inputs")              // 参数来自下面同名的静态方法
+  void countTheNumberOfMaxBlocks(String input, int expectedOutput) {
+    int blockSize = new BlockCounter().maxBlock(input);
+    assertThat(blockSize).isEqualTo(expectedOutput);
+  }
+
+  static Stream&lt;Arguments&gt; inputs() {
+    return Stream.of(
+        Arguments.of("aabbbcc", 3),
+        Arguments.of("aabbbccc", 3),
+        Arguments.of("abc", 1),
+        Arguments.of("aa", 2),
+        Arguments.of("aabbbb", 4),
+        Arguments.of("", 0));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="用函数生成参数 + 给用例起名"><pre>
+def inputs():                          # 普通函数返回用例列表，想怎么生成都行
+    return [
+        pytest.param("aabbbcc", 3, id="one-longest-block"),     # id：报告里显示的名字
+        pytest.param("aabbbccc", 3, id="two-longest-blocks"),
+        pytest.param("abc", 1, id="blocks-of-length-1"),
+        pytest.param("aa", 2, id="single-block"),
+        pytest.param("aabbbb", 4, id="longest-is-last"),
+        pytest.param("", 0, id="empty"),
+    ]
+
+@pytest.mark.parametrize("input_str, expected_output", inputs())
+def test_count_the_number_of_max_blocks(input_str, expected_output):
+    assert max_block(input_str) == expected_output
+</pre></div>
+<div class="code" data-lang="ts" data-file="用对象数组 + 给用例起名"><pre>
+const inputs = [                       // 用对象让每一列都有名字，比数组更清楚
+  { name: "one longest block", input: "aabbbcc", expected: 3 },
+  { name: "two longest blocks", input: "aabbbccc", expected: 3 },
+  { name: "blocks of length 1", input: "abc", expected: 1 },
+  { name: "single block", input: "aa", expected: 2 },
+  { name: "longest is last", input: "aabbbb", expected: 4 },
+  { name: "empty", input: "", expected: 0 },
+];
+
+test.each(inputs)("$name", ({ input, expected }) =&gt; {   // $name 取对象的 name 字段
+  expect(maxBlock(input)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<h2 id="exceptions">测试异常</h2>
+
+<p>第 1 章的第一个测试就是「期待异常」的测试。三种写法：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="AssertJ：assertThatThrownBy"><pre>
+@Test
+void rejectsNull() {
+  assertThatThrownBy(() -&gt; new BlockCounter().maxBlock(null))   // lambda：一段待执行的代码
+      .isInstanceOf(NullPointerException.class);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pytest.raises"><pre>
+def test_rejects_non_strings():
+    with pytest.raises(TypeError):    # with 块里必须抛出指定异常，否则测试失败
+        max_block(42)                 # 42[0] → TypeError
+
+# 注意：max_block(None) 并不会抛异常！`if not s` 把 None 也当成了空字符串，返回 0。
+# 这到底是 Bug 还是特性？这是一个契约问题（第 4 章）—— 测试帮你把它暴露了出来。
+</pre></div>
+<div class="code" data-lang="ts" data-file="expect(...).toThrow"><pre>
+test("rejects null", () =&gt; {
+  // 传一个函数给 expect，而不是直接调用；否则异常会在 expect 之前就抛出
+  expect(() =&gt; maxBlock(null as unknown as string)).toThrow(TypeError);
+});
+</pre></div>
+</div>
+
+<h2 id="ci">在持续集成中运行</h2>
+
+<p>本仓库的 <code>.github/workflows/tests.yml</code> 在每次 push 时，为每一章各启动一个任务：检出代码 → 安装 JDK 11 → 缓存 Maven 依赖 → <code>mvn test</code>。换成 Python 或 Node 项目，结构完全一样：</p>
+
+<div class="langs">
+<div class="code" data-lang="text" data-file=".github/workflows/tests.yml（本仓库，节选）"><pre>
+name: tests
+on: push
+jobs:
+  ch1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: 11
+      - run: cd ch1 &amp;&amp; mvn -B test --file pom.xml
+</pre></div>
+<div class="code" data-lang="text" data-file="Python 项目的等价写法"><pre>
+name: tests
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+</pre></div>
+<div class="code" data-lang="text" data-file="TypeScript 项目的等价写法"><pre>
+name: tests
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx vitest run
+</pre></div>
+</div>
+
+<h2 id="summary">小结</h2>
+<ul>
+  <li>一个测试 = 准备 + 执行 + 断言。JUnit 用 <code>@Test</code> 标记，pytest 用 <code>test_</code> 前缀，Vitest 用 <code>test()</code>。</li>
+  <li>失败报告告诉你期望值和实际值；学会读它，是调试的第一步。</li>
+  <li>生命周期钩子（<code>@BeforeEach</code> / fixture / <code>beforeEach</code>）让每个测试都从干净、新鲜的状态开始。</li>
+  <li>结构相同、数据不同的测试，用参数化测试写成一张表。</li>
+  <li>准备好了？从<a href="ch01.html">第 1 章</a>开始吧。</li>
+</ul>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>intro-to-junit</code> 目录运行 <code>mvn test</code>，确认 4 个测试类全部通过。</li>
+    <li>把上面「有 Bug 的版本」粘贴进 <code>BlockCounter</code>，再跑一次，亲眼看看哪些测试变红、报告长什么样。</li>
+    <li>任选 Python 或 TypeScript，从零搭建环境，把 maxBlock 和参数化测试敲一遍并运行。</li>
+    <li>想一想：这 6 个用例够了吗？用第 2 章的方法再补几个（比如只有一个字符、最长块在开头、大小写不同的字母）。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

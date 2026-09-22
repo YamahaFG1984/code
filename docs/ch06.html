@@ -1,0 +1,1867 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 6 章 · 测试替身与 Mock — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="6">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 6 章</span>
+<h1>测试替身与 Mock</h1>
+<p class="lede">
+  真实的类很少孤零零地工作：它会调用数据库、Web 服务、别的类。测试它时把这些依赖全带上，往往又慢、又难、又麻烦。
+  <strong>测试替身</strong>就像电影里的替身演员：「看起来像 B，但它不是 B」，而且在测试里完全听你指挥。
+  这一章讲五种替身的区别，用 Mockito / unittest.mock / Vitest 把它们用起来，更重要的是讨论：<strong>什么该 Mock，什么不该</strong>。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>分清 Dummy、Fake、Stub、Spy、Mock</li>
+    <li>学会桩返回值、验证交互、捕获参数、模拟异常</li>
+    <li>理解为了能注入替身，生产代码要怎么改（依赖注入）</li>
+    <li>知道 Mock 的代价，掌握「该不该 Mock」的判断标准</li>
+    <li>学会对付「Mock 不了」的东西：日期时间、不属于你的类型</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="why">为什么需要替身</h2>
+
+<p>
+  一个开票系统里，<code>IssuedInvoices</code> 负责访问数据库，里面全是 SQL。别的类（比如生成新发票的 <code>InvoiceGenerationService</code>）依赖它来保存发票。
+  于是每次测试 InvoiceGenerationService，都会间接连到数据库 —— 要准备数据库、保证里面的数据正确……
+  可我们测 InvoiceGenerationService 时，<em>并不想</em>测 SQL 对不对，那是 IssuedInvoices 自己的测试（第 9 章的集成测试）该管的事。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="测试类 A 时，它依赖的 B、C 以及数据库都会被牵扯进来；用替身替换 B 就能切断依赖">
+  <text class="ttl" x="190" y="22" text-anchor="middle">不用替身</text>
+  <rect class="bx-b" x="40" y="90" width="70" height="44" rx="8"/><text class="ttl on-b" x="75" y="117" text-anchor="middle">A</text>
+  <rect class="bx" x="160" y="40" width="70" height="44" rx="8"/><text class="ttl" x="195" y="67" text-anchor="middle">B</text>
+  <rect class="bx" x="160" y="140" width="70" height="44" rx="8"/><text class="ttl" x="195" y="167" text-anchor="middle">C</text>
+  <rect class="bx-r" x="280" y="40" width="60" height="44" rx="22"/><text class="ttl on-r" x="310" y="67" text-anchor="middle">DB</text>
+  <text class="lbl" x="310" y="170" text-anchor="middle">……</text>
+  <path class="ln" d="M112 104 L156 68" marker-end="url(#ar)"/>
+  <path class="ln" d="M112 120 L156 156" marker-end="url(#ar)"/>
+  <path class="ln" d="M232 62 H276" marker-end="url(#ar)"/>
+  <path class="ln" d="M232 162 H286" marker-end="url(#ar)"/>
+  <text class="sm" x="190" y="214" text-anchor="middle">测 A，就得把 B、C 和它们的所有依赖都搭起来</text>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">用替身</text>
+  <rect class="bx-b" x="420" y="90" width="70" height="44" rx="8"/><text class="ttl on-b" x="455" y="117" text-anchor="middle">A</text>
+  <rect class="bx-a" x="540" y="40" width="110" height="44" rx="8"/><text class="ttl on-a" x="595" y="60" text-anchor="middle">B 的替身</text><text class="sm" x="595" y="76" text-anchor="middle">返回写死的数据</text>
+  <rect class="bx" x="540" y="140" width="70" height="44" rx="8"/><text class="ttl" x="575" y="167" text-anchor="middle">C</text>
+  <path class="ln" d="M492 104 L536 68" marker-end="url(#ar)"/>
+  <path class="ln" d="M492 120 L536 156" marker-end="url(#ar)"/>
+  <path class="ln-d" d="M652 62 H700"/><text class="sm" x="706" y="66">✂</text>
+  <text class="sm" x="570" y="214" text-anchor="middle">替身完全受测试控制，数据库被切掉了</text>
+</svg>
+<figcaption>图 6-1　替身切断了被测类与复杂依赖之间的连线</figcaption>
+</figure>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#127918;</span><h4>更可控</h4><p>想让依赖抛异常？告诉替身抛就行。想让真实类抛异常或返回一个假日期，可能非常难。</p></div>
+  <div class="card"><span class="ic">&#9889;</span><h4>更快</h4><p>真实依赖要访问数据库或 Web 服务，可能要几秒；替身直接返回配置好的值，几乎不耗时。</p></div>
+  <div class="card"><span class="ic">&#129504;</span><h4>帮助设计</h4><p>作为设计技术，Mock 促使你思考类之间该如何交互、契约是什么、边界在哪。推荐 Freeman 和 Pryce 的《测试驱动的面向对象软件开发》（2009）。本书主要从测试角度讲 Mock。</p></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 替身也要守契约</div>
+  <p>我们把 Mock 放在单元测试这一侧，因为目标是专注于一个单元。但我们依然关心依赖的契约：<strong>替身必须和它模拟的类做同样的事、遵守同样的承诺</strong>。</p>
+</div>
+
+<h2 id="kinds">五种替身</h2>
+
+<p>Meszaros 在《xUnit Test Patterns》（2007）中定义了五种测试替身：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="五种测试替身：Dummy、Fake、Stub、Mock、Spy 的区别">
+  <rect class="bx-d" x="14" y="20" width="140" height="210" rx="12"/>
+  <text class="ttl" x="84" y="46" text-anchor="middle">Dummy</text>
+  <text class="sm" x="84" y="68" text-anchor="middle">哑对象</text>
+  <text class="lbl" x="84" y="104" text-anchor="middle">传进去</text>
+  <text class="lbl" x="84" y="122" text-anchor="middle">但从来不用</text>
+  <text class="sm" x="84" y="168" text-anchor="middle">凑参数用：测 Customer</text>
+  <text class="sm" x="84" y="184" text-anchor="middle">时随便给个 Address</text>
+
+  <rect class="bx-g" x="164" y="20" width="140" height="210" rx="12"/>
+  <text class="ttl on-g" x="234" y="46" text-anchor="middle">Fake</text>
+  <text class="sm" x="234" y="68" text-anchor="middle">伪实现</text>
+  <text class="lbl" x="234" y="104" text-anchor="middle">真能工作，</text>
+  <text class="lbl" x="234" y="122" text-anchor="middle">只是更简单</text>
+  <text class="sm" x="234" y="168" text-anchor="middle">用 ArrayList 代替数据库；</text>
+  <text class="sm" x="234" y="184" text-anchor="middle">内存数据库 HSQLDB</text>
+
+  <rect class="bx-b" x="314" y="20" width="140" height="210" rx="12"/>
+  <text class="ttl on-b" x="384" y="46" text-anchor="middle">Stub</text>
+  <text class="sm" x="384" y="68" text-anchor="middle">桩</text>
+  <text class="lbl" x="384" y="104" text-anchor="middle">返回写死的</text>
+  <text class="lbl" x="384" y="122" text-anchor="middle">答案</text>
+  <text class="sm" x="384" y="168" text-anchor="middle">getAllInvoices() 返回</text>
+  <text class="sm" x="384" y="184" text-anchor="middle">空列表 / 一个 / 多个</text>
+  <text class="sm on-b" x="384" y="214" text-anchor="middle">最常用</text>
+
+  <rect class="bx-a" x="464" y="20" width="140" height="210" rx="12"/>
+  <text class="ttl on-a" x="534" y="46" text-anchor="middle">Mock</text>
+  <text class="sm" x="534" y="68" text-anchor="middle">模拟对象</text>
+  <text class="lbl" x="534" y="104" text-anchor="middle">像 Stub，还会</text>
+  <text class="lbl" x="534" y="122" text-anchor="middle">记录所有调用</text>
+  <text class="sm" x="534" y="168" text-anchor="middle">事后断言：「这个方法</text>
+  <text class="sm" x="534" y="184" text-anchor="middle">只被调用了一次」</text>
+
+  <rect class="bx-p" x="614" y="20" width="132" height="210" rx="12"/>
+  <text class="ttl on-p" x="680" y="46" text-anchor="middle">Spy</text>
+  <text class="sm" x="680" y="68" text-anchor="middle">间谍</text>
+  <text class="lbl" x="680" y="104" text-anchor="middle">包住真实对象，</text>
+  <text class="lbl" x="680" y="122" text-anchor="middle">观察它</text>
+  <text class="sm" x="680" y="168" text-anchor="middle">用真实实现，但仍想</text>
+  <text class="sm" x="680" y="184" text-anchor="middle">断言交互。较少见</text>
+</svg>
+<figcaption>图 6-2　五种测试替身，各有各的用处</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 日常用语里的「Mock」</div>
+  <p>
+    Mockito 的 <code>mock()</code>、Python 的 <code>Mock()</code>、Vitest 的 <code>vi.fn()</code> 创建的对象，既能当 Stub（配置返回值）也能当 Mock（验证调用）。
+    所以日常大家说「Mock 一下」往往泛指所有替身。但弄清楚你在用它的哪种能力很重要：<strong>是为了给被测代码喂数据（Stub），还是为了检查被测代码对外做了什么（Mock）</strong>。
+  </p>
+</div>
+
+<h2 id="frameworks">Mock 框架速查</h2>
+
+<p>几乎每种语言都有 Mock 框架，API 不同但思想一样。本书用 Java 的 <strong>Mockito</strong>，只需要记住三个方法就能干大部分活：</p>
+
+<div class="tw">
+<table>
+  <tr><th>做什么</th><th>Mockito（Java）</th><th>unittest.mock（Python）</th><th>Vitest（TypeScript）</th></tr>
+  <tr><td>创建替身</td><td><code>mock(IssuedInvoices.class)</code></td><td><code>Mock(spec=IssuedInvoices)</code></td><td><code>{ all: vi.fn() }</code></td></tr>
+  <tr><td>桩返回值</td><td><code>when(x.all()).thenReturn(list)</code></td><td><code>x.all.return_value = list</code></td><td><code>x.all.mockReturnValue(list)</code></td></tr>
+  <tr><td>验证被调用</td><td><code>verify(sap).send(inv)</code></td><td><code>sap.send.assert_any_call(inv)</code></td><td><code>expect(sap.send).toHaveBeenCalledWith(inv)</code></td></tr>
+  <tr><td>验证次数</td><td><code>verify(sap, times(2)).send(any())</code></td><td><code>assert sap.send.call_count == 2</code></td><td><code>toHaveBeenCalledTimes(2)</code></td></tr>
+  <tr><td>验证从未调用</td><td><code>verify(sap, never()).send(any())</code></td><td><code>sap.send.assert_not_called()</code></td><td><code>expect(sap.send).not.toHaveBeenCalled()</code></td></tr>
+  <tr><td>捕获参数</td><td><code>ArgumentCaptor</code></td><td><code>sap.send.call_args</code></td><td><code>sap.send.mock.calls[0][0]</code></td></tr>
+  <tr><td>让它抛异常</td><td><code>doThrow(e).when(sap).send(inv)</code></td><td><code>sap.send.side_effect = ...</code></td><td><code>sap.send.mockImplementation(() =&gt; { throw e })</code></td></tr>
+</table>
+</div>
+
+<h2 id="stub">桩：替依赖返回数据</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>返回所有金额小于 100 的已开发票。发票存在数据库里，<code>IssuedInvoices</code> 类已经有一个取出所有发票的方法。</p>
+</div>
+
+<p>先看两个基础类：<code>Invoice</code> 是简单的实体；<code>IssuedInvoices</code> 负责和数据库打交道（仓库里是一个用 HSQLDB 的朴素实现）。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/stub/Invoice.java + IssuedInvoices.java（节选）"><pre>
+public class Invoice {
+  private final String customer;
+  private final int value;
+  // 构造函数、getter、equals/hashCode、toString……
+}
+
+public class IssuedInvoices {
+  private DatabaseConnection connection;
+
+  public IssuedInvoices(DatabaseConnection connection) {
+    this.connection = connection;
+  }
+
+  public List&lt;Invoice&gt; all() {            // select * from invoice
+    return connection.withSql(() -&gt; {
+      try (var ps = connection.getConnection().prepareStatement("select * from invoice")) {
+        final var rs = ps.executeQuery();
+        List&lt;Invoice&gt; allInvoices = new ArrayList&lt;&gt;();
+        while (rs.next()) {
+          allInvoices.add(new Invoice(rs.getString("name"), rs.getInt("value")));
+        }
+        return allInvoices;
+      }
+    });
+  }
+
+  public void save(Invoice inv) { /* insert into invoice (name, value) values (?,?) */ }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="invoices.py"><pre>
+import sqlite3
+from dataclasses import dataclass
+
+@dataclass(frozen=True, order=True)      # frozen：可比较、可哈希；order：可排序
+class Invoice:
+    customer: str
+    value: int
+
+class IssuedInvoices:
+    def __init__(self, connection: sqlite3.Connection):
+        self._conn = connection
+
+    def all(self) -&gt; list[Invoice]:
+        rows = self._conn.execute("select name, value from invoice").fetchall()
+        return [Invoice(name, value) for name, value in rows]
+
+    def save(self, inv: Invoice) -&gt; None:
+        self._conn.execute("insert into invoice (name, value) values (?, ?)",
+                           (inv.customer, inv.value))
+        self._conn.commit()
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoices.ts"><pre>
+import { DatabaseSync } from "node:sqlite";   // Node 22.5+ 内置的 SQLite
+
+export interface Invoice {
+  customer: string;
+  value: number;
+}
+
+export interface IssuedInvoices {              // 被测类只依赖这个接口
+  all(): Invoice[];
+}
+
+export class SqlIssuedInvoices implements IssuedInvoices {
+  constructor(private readonly db: DatabaseSync) {}
+
+  all(): Invoice[] {
+    return this.db.prepare("select name, value from invoice").all()
+      .map((r) =&gt; ({ customer: String(r.name), value: Number(r.value) }));
+  }
+
+  save(inv: Invoice): void {
+    this.db.prepare("insert into invoice (name, value) values (?, ?)").run(inv.customer, inv.value);
+  }
+}
+</pre></div>
+</div>
+
+<p>第一版实现在方法内部自己创建了数据库连接和 IssuedInvoices：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/stub/InvoiceFilterWithDatabase.java"><pre>
+public class InvoiceFilterWithDatabase {
+
+  public List&lt;Invoice&gt; lowValueInvoices() {
+    DatabaseConnection connection = new DatabaseConnection();         // 自己 new 依赖
+    IssuedInvoices issuedInvoices = new IssuedInvoices(connection);
+
+    try {
+      List&lt;Invoice&gt; all = issuedInvoices.all();                        // 从数据库取所有发票
+      return all.stream()
+          .filter(invoice -&gt; invoice.getValue() &lt; 100)
+          .collect(toList());
+    } finally {
+      connection.close();                                              // 别忘了关连接
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="invoice_filter_with_database.py"><pre>
+import sqlite3
+from invoices import Invoice, IssuedInvoices
+
+class InvoiceFilterWithDatabase:
+
+    def low_value_invoices(self) -&gt; list[Invoice]:
+        connection = sqlite3.connect("invoices.db")          # 自己创建依赖
+        issued_invoices = IssuedInvoices(connection)
+        try:
+            all_invoices = issued_invoices.all()             # 从数据库取所有发票
+            return [inv for inv in all_invoices if inv.value &lt; 100]
+        finally:
+            connection.close()                               # 别忘了关连接
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceFilterWithDatabase.ts"><pre>
+import { DatabaseSync } from "node:sqlite";
+import { Invoice, SqlIssuedInvoices } from "./invoices";
+
+export class InvoiceFilterWithDatabase {
+  lowValueInvoices(): Invoice[] {
+    const db = new DatabaseSync("invoices.db");        // 自己创建依赖
+    const issuedInvoices = new SqlIssuedInvoices(db);
+    try {
+      return issuedInvoices.all()                      // 从数据库取所有发票
+        .filter((invoice) =&gt; invoice.value &lt; 100);
+    } finally {
+      db.close();                                      // 别忘了关连接
+    }
+  }
+}
+</pre></div>
+</div>
+
+<p>测它就得有一个真的、装好数据的数据库：每个测试前清空表、存入发票，测试后关闭连接：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/stub/InvoiceFilterWithDatabaseTest.java"><pre>
+public class InvoiceFilterWithDatabaseTest {
+  private IssuedInvoices invoices;
+  private DatabaseConnection dbConnection;
+
+  @BeforeEach                      // 每个测试方法之前执行
+  public void open() {
+    dbConnection = new DatabaseConnection();
+    invoices = new IssuedInvoices(dbConnection);
+    dbConnection.resetDatabase();  // 清空表，免得旧数据干扰
+  }
+
+  @AfterEach                       // 每个测试方法之后执行
+  public void close() {
+    if (dbConnection != null) dbConnection.close();
+  }
+
+  @Test
+  void filterInvoices() {
+    final var mauricio = new Invoice("Mauricio", 20);
+    final var steve = new Invoice("Steve", 99);      // 99 和 100：边界测试！
+    final var frank = new Invoice("Frank", 100);
+
+    invoices.save(mauricio);                         // 必须真的存进数据库……
+    invoices.save(steve);
+    invoices.save(frank);
+
+    final InvoiceFilterWithDatabase filter = new InvoiceFilterWithDatabase();
+    assertThat(filter.lowValueInvoices()).containsExactlyInAnyOrder(mauricio, steve);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_invoice_filter_with_database.py"><pre>
+import sqlite3
+import pytest
+from invoices import Invoice, IssuedInvoices
+from invoice_filter_with_database import InvoiceFilterWithDatabase
+
+@pytest.fixture
+def invoices():
+    connection = sqlite3.connect("invoices.db")
+    connection.execute("create table if not exists invoice (name text, value int)")
+    connection.execute("delete from invoice")        # 清空表，免得旧数据干扰
+    connection.commit()
+    yield IssuedInvoices(connection)                 # yield 之后的代码 = 测试后清理
+    connection.close()
+
+def test_filter_invoices(invoices):
+    mauricio = Invoice("Mauricio", 20)
+    steve = Invoice("Steve", 99)                     # 99 和 100：边界测试！
+    frank = Invoice("Frank", 100)
+
+    invoices.save(mauricio)                          # 必须真的存进数据库……
+    invoices.save(steve)
+    invoices.save(frank)
+
+    result = InvoiceFilterWithDatabase().low_value_invoices()
+    assert sorted(result) == sorted([mauricio, steve])
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceFilterWithDatabase.test.ts"><pre>
+import { beforeEach, afterEach, test, expect } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { SqlIssuedInvoices } from "./invoices";
+import { InvoiceFilterWithDatabase } from "./invoiceFilterWithDatabase";
+
+let db: DatabaseSync;
+let invoices: SqlIssuedInvoices;
+
+beforeEach(() =&gt; {
+  db = new DatabaseSync("invoices.db");
+  db.exec("create table if not exists invoice (name text, value integer)");
+  db.exec("delete from invoice");                  // 清空表，免得旧数据干扰
+  invoices = new SqlIssuedInvoices(db);
+});
+
+afterEach(() =&gt; db.close());
+
+test("filter invoices", () =&gt; {
+  const mauricio = { customer: "Mauricio", value: 20 };
+  const steve = { customer: "Steve", value: 99 };   // 99 和 100：边界测试！
+  const frank = { customer: "Frank", value: 100 };
+
+  invoices.save(mauricio);                          // 必须真的存进数据库……
+  invoices.save(steve);
+  invoices.save(frank);
+
+  const result = new InvoiceFilterWithDatabase().lowValueInvoices();
+  expect(result).toEqual(expect.arrayContaining([mauricio, steve]));
+  expect(result).toHaveLength(2);
+});
+</pre></div>
+</div>
+
+<p>这还只是个小例子。想象一个更大的业务类，要存的不只是发票，还有客户、商品、购物车…… 很快就会变得又烦又贵。</p>
+
+<h3>第一步：让依赖可以被替换</h3>
+
+<p>
+  当前实现在方法内部 <code>new</code> 了 IssuedInvoices，测试根本没机会把替身塞进去。所以我们<strong>修改生产代码来方便测试</strong>（习惯这件事吧）：
+  让 IssuedInvoices 通过构造函数传进来。注意 DatabaseConnection 不需要注入 —— InvoiceFilter 根本用不到它。测试里要做的越少越好。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="依赖注入前后对比：之前类内部自己创建依赖，之后通过构造函数接收">
+  <text class="ttl on-r" x="190" y="22" text-anchor="middle">之前：自己 new</text>
+  <rect class="bx-r" x="40" y="40" width="300" height="130" rx="12"/>
+  <text class="ttl" x="190" y="64" text-anchor="middle">InvoiceFilter</text>
+  <rect class="bx" x="70" y="82" width="240" height="68" rx="8"/>
+  <text class="mono" x="190" y="108" text-anchor="middle">new DatabaseConnection()</text>
+  <text class="mono" x="190" y="130" text-anchor="middle">new IssuedInvoices(conn)</text>
+  <text class="sm on-r" x="190" y="192" text-anchor="middle">测试没法插手：永远连真实数据库</text>
+
+  <text class="ttl on-g" x="570" y="22" text-anchor="middle">之后：从构造函数接收</text>
+  <rect class="bx-g" x="420" y="40" width="300" height="130" rx="12"/>
+  <text class="ttl" x="570" y="64" text-anchor="middle">InvoiceFilter(issuedInvoices)</text>
+  <rect class="bx-b" x="440" y="100" width="120" height="50" rx="8"/>
+  <text class="sm on-b" x="500" y="122" text-anchor="middle">生产：传真实的</text>
+  <text class="sm on-b" x="500" y="138" text-anchor="middle">IssuedInvoices</text>
+  <rect class="bx-a" x="580" y="100" width="120" height="50" rx="8"/>
+  <text class="sm on-a" x="640" y="122" text-anchor="middle">测试：传一个</text>
+  <text class="sm on-a" x="640" y="138" text-anchor="middle">Stub</text>
+  <text class="sm on-g" x="570" y="192" text-anchor="middle">同一份代码，生产和测试各取所需</text>
+</svg>
+<figcaption>图 6-3　依赖注入：类不自己创建依赖，而是接收依赖</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/stub/InvoiceFilter.java"><pre>
+public class InvoiceFilter {
+
+  private final IssuedInvoices issuedInvoices;
+
+  public InvoiceFilter(IssuedInvoices issuedInvoices) {   // 依赖从构造函数传进来
+    this.issuedInvoices = issuedInvoices;
+  }
+
+  public List&lt;Invoice&gt; lowValueInvoices() {
+    List&lt;Invoice&gt; all = issuedInvoices.all();
+    return all.stream()
+        .filter(invoice -&gt; invoice.getValue() &lt; 100)
+        .collect(toList());
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="invoice_filter.py"><pre>
+from invoices import Invoice, IssuedInvoices
+
+class InvoiceFilter:
+
+    def __init__(self, issued_invoices: IssuedInvoices):   # 依赖从构造函数传进来
+        self._issued_invoices = issued_invoices
+
+    def low_value_invoices(self) -&gt; list[Invoice]:
+        return [inv for inv in self._issued_invoices.all() if inv.value &lt; 100]
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceFilter.ts"><pre>
+import { Invoice, IssuedInvoices } from "./invoices";
+
+export class InvoiceFilter {
+  constructor(private readonly issuedInvoices: IssuedInvoices) {}   // 依赖从构造函数传进来
+
+  lowValueInvoices(): Invoice[] {
+    return this.issuedInvoices.all().filter((invoice) =&gt; invoice.value &lt; 100);
+  }
+}
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 依赖注入（Dependency Injection）</div>
+  <p>类不自己实例化依赖、而是接收依赖，这是一种流行的设计技术。它不仅让我们能注入替身，也让生产代码更灵活。想深入可读 van Deursen 和 Seemann 的《Dependency Injection: Principles, Practices, and Patterns》（2019）。第 7 章会继续讨论。</p>
+</div>
+
+<h3>第二步：用桩代替数据库</h3>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/stub/InvoiceFilterTest.java"><pre>
+public class InvoiceFilterTest {
+
+  @Test
+  void filterInvoices() {
+    IssuedInvoices issuedInvoices = mock(IssuedInvoices.class);   // 创建一个桩
+
+    Invoice mauricio = new Invoice("Mauricio", 20);
+    Invoice steve = new Invoice("Steve", 99);
+    Invoice frank = new Invoice("Frank", 100);
+    List&lt;Invoice&gt; listOfInvoices = Arrays.asList(mauricio, steve, frank);
+
+    when(issuedInvoices.all()).thenReturn(listOfInvoices);        // all() 被调用时返回这个列表
+
+    InvoiceFilter filter = new InvoiceFilter(issuedInvoices);     // 把桩注入被测类
+
+    assertThat(filter.lowValueInvoices())
+        .containsExactlyInAnyOrder(mauricio, steve);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_invoice_filter.py"><pre>
+from unittest.mock import Mock
+from invoices import Invoice, IssuedInvoices
+from invoice_filter import InvoiceFilter
+
+def test_filter_invoices():
+    # spec= 让替身只接受真实类里存在的方法，拼错方法名会立刻报错
+    issued_invoices = Mock(spec=IssuedInvoices)
+
+    mauricio = Invoice("Mauricio", 20)
+    steve = Invoice("Steve", 99)
+    frank = Invoice("Frank", 100)
+
+    issued_invoices.all.return_value = [mauricio, steve, frank]   # all() 被调用时返回这个列表
+
+    invoice_filter = InvoiceFilter(issued_invoices)               # 把桩注入被测类
+
+    assert sorted(invoice_filter.low_value_invoices()) == sorted([mauricio, steve])
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceFilter.test.ts"><pre>
+import { test, expect, vi } from "vitest";
+import { IssuedInvoices } from "./invoices";
+import { InvoiceFilter } from "./invoiceFilter";
+
+test("filter invoices", () =&gt; {
+  const mauricio = { customer: "Mauricio", value: 20 };
+  const steve = { customer: "Steve", value: 99 };
+  const frank = { customer: "Frank", value: 100 };
+
+  // 在 TS 里，桩就是一个满足接口的普通对象；vi.fn() 让它还能记录调用
+  const issuedInvoices: IssuedInvoices = {
+    all: vi.fn().mockReturnValue([mauricio, steve, frank]),       // all() 返回这个列表
+  };
+
+  const filter = new InvoiceFilter(issuedInvoices);               // 把桩注入被测类
+
+  expect(filter.lowValueInvoices()).toEqual([mauricio, steve]);
+});
+</pre></div>
+</div>
+
+<p>被测方法调用 <code>issuedInvoices.all()</code> 时，拿到的是桩返回的三张发票，过滤后剩两张，断言通过。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="桩为被测代码提供间接输入">
+  <rect class="bx" x="20" y="50" width="120" height="70" rx="10"/>
+  <text class="ttl" x="80" y="80" text-anchor="middle">测试</text>
+  <text class="sm" x="80" y="100" text-anchor="middle">配置桩 + 断言结果</text>
+  <path class="ln" d="M142 85 H256" marker-end="url(#ar)"/>
+  <text class="sm" x="199" y="76" text-anchor="middle">lowValueInvoices()</text>
+  <rect class="bx-b" x="260" y="50" width="200" height="70" rx="10"/>
+  <text class="ttl on-b" x="360" y="80" text-anchor="middle">InvoiceFilter</text>
+  <text class="sm" x="360" y="100" text-anchor="middle">被测类</text>
+  <path class="ln" d="M462 70 H576" marker-end="url(#ar)"/>
+  <text class="sm" x="519" y="62" text-anchor="middle">all()</text>
+  <path class="ln-a" d="M576 100 H466" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="521" y="118" text-anchor="middle">[mauricio, steve, frank]</text>
+  <rect class="bx-a" x="580" y="50" width="160" height="70" rx="10"/>
+  <text class="ttl on-a" x="660" y="80" text-anchor="middle">IssuedInvoices 桩</text>
+  <text class="sm" x="660" y="100" text-anchor="middle">没有数据库</text>
+  <path class="ln-g" d="M256 110 H146" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="199" y="128" text-anchor="middle">[mauricio, steve]</text>
+  <text class="sm" x="380" y="158" text-anchor="middle">桩的职责：给被测代码提供「间接输入」—— 那些不是通过参数传进来、而是从依赖里拿到的数据</text>
+</svg>
+<figcaption>图 6-4　桩：让依赖返回我们想要的数据</figcaption>
+</figure>
+
+<p>桩不仅让测试更好写，还让测试<strong>更内聚</strong>：旧版测试失败，可能是 InvoiceFilter 有 Bug，也可能是 IssuedInvoices 的 SQL 有 Bug；新版只可能因为 InvoiceFilter 失败。调试时省心多了。IssuedInvoices 当然也该测，但那是另一个地方的集成测试（第 9 章）。</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 用了 Mock 也要系统地测</div>
+  <p>这一章不聚焦系统化测试，但你应该照做。这里只有一个用例（顺便测了 100 的边界），你还应该测空列表、单元素列表，以及规格测试和结构化测试中冒出来的其他用例。前几章的所有技术依然适用。</p>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 现实中这条规则应该放进 SQL</div>
+  <p>真实系统里，「金额 &lt; 100」这种过滤最好在数据库里做，一条 SQL 性能好得多。请从这个简单例子中抽象出要点：<strong>凡是测试时使用起来很贵的依赖，桩都能派上用场</strong>。</p>
+</div>
+
+<h2 id="mock">Mock：验证交互</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 新需求</div>
+  <p>所有低金额发票都要发送给 SAP 系统（一种企业管理软件）。SAP 提供了一个接收发票的 sendInvoice Web 服务。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/mock/SAP.java + SAPInvoiceSender.java"><pre>
+public interface SAP {           // 封装与 SAP 的通信，具体怎么实现无所谓
+  void send(Invoice invoice);
+}
+
+public class SAPInvoiceSender {
+  private final InvoiceFilter filter;
+  private final SAP sap;
+
+  public SAPInvoiceSender(InvoiceFilter filter, SAP sap) {   // 两个依赖都从构造函数注入
+    this.filter = filter;
+    this.sap = sap;
+  }
+
+  public void sendLowValuedInvoices() {
+    List&lt;Invoice&gt; lowValuedInvoices = filter.lowValueInvoices();
+    for (Invoice invoice : lowValuedInvoices) {
+      sap.send(invoice);
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="sap_invoice_sender.py"><pre>
+from typing import Protocol
+from invoices import Invoice
+from invoice_filter import InvoiceFilter
+
+class SAP(Protocol):             # 封装与 SAP 的通信，具体怎么实现无所谓
+    def send(self, invoice: Invoice) -&gt; None: ...
+
+class SAPInvoiceSender:
+    def __init__(self, invoice_filter: InvoiceFilter, sap: SAP):   # 两个依赖都注入
+        self._filter = invoice_filter
+        self._sap = sap
+
+    def send_low_valued_invoices(self) -&gt; None:
+        for invoice in self._filter.low_value_invoices():
+            self._sap.send(invoice)
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.ts"><pre>
+import { Invoice } from "./invoices";
+import { InvoiceFilter } from "./invoiceFilter";
+
+export interface SAP {           // 封装与 SAP 的通信，具体怎么实现无所谓
+  send(invoice: Invoice): void;
+}
+
+export class SAPInvoiceSender {
+  constructor(
+    // 只依赖我们用到的那部分「形状」，测试时传一个普通对象就行
+    private readonly filter: Pick&lt;InvoiceFilter, "lowValueInvoices"&gt;,
+    private readonly sap: SAP,
+  ) {}
+
+  sendLowValuedInvoices(): void {
+    for (const invoice of this.filter.lowValueInvoices()) {
+      this.sap.send(invoice);
+    }
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  测试时，InvoiceFilter 是一个返回发票列表的东西，用<strong>桩</strong>。但这个测试的主要目的是确认<strong>每张低金额发票都发给了 SAP</strong> ——
+  没有真的 SAP，怎么断言？答案：确认 <code>send()</code> 被调用了。Mock 框架在背后记录了与 Mock 的所有交互，测试最后问它一句就行：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/mock/SAPInvoiceSenderTest.java"><pre>
+public class SAPInvoiceSenderTest {
+  // 作为字段：JUnit 每个测试方法都会新建一个测试类实例，所以每个测试都是新的 Mock
+  private InvoiceFilter filter = mock(InvoiceFilter.class);
+  private SAP sap = mock(SAP.class);
+  private SAPInvoiceSender sender = new SAPInvoiceSender(filter, sap);
+
+  @Test
+  void sendToSap() {
+    Invoice mauricio = new Invoice("Mauricio", 20);
+    Invoice frank = new Invoice("Frank", 99);
+    List&lt;Invoice&gt; invoices = Arrays.asList(mauricio, frank);
+
+    when(filter.lowValueInvoices()).thenReturn(invoices);    // filter 是桩
+
+    sender.sendLowValuedInvoices();
+
+    verify(sap).send(mauricio);                              // sap 是 Mock：验证交互
+    verify(sap).send(frank);
+  }
+
+  @Test
+  void noLowValueInvoices() {
+    List&lt;Invoice&gt; invoices = emptyList();
+    when(filter.lowValueInvoices()).thenReturn(invoices);
+
+    sender.sendLowValuedInvoices();
+
+    verify(sap, never()).send(any(Invoice.class));           // 一次都不应该调用
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_sap_invoice_sender.py"><pre>
+from unittest.mock import Mock
+import pytest
+from invoices import Invoice
+from invoice_filter import InvoiceFilter
+from sap_invoice_sender import SAPInvoiceSender
+
+@pytest.fixture
+def invoice_filter():
+    return Mock(spec=InvoiceFilter)
+
+@pytest.fixture
+def sap():
+    return Mock()
+
+@pytest.fixture
+def sender(invoice_filter, sap):
+    return SAPInvoiceSender(invoice_filter, sap)
+
+def test_send_to_sap(invoice_filter, sap, sender):
+    mauricio = Invoice("Mauricio", 20)
+    frank = Invoice("Frank", 99)
+    invoice_filter.low_value_invoices.return_value = [mauricio, frank]   # 桩
+
+    sender.send_low_valued_invoices()
+
+    sap.send.assert_any_call(mauricio)                                   # Mock：验证交互
+    sap.send.assert_any_call(frank)
+
+def test_no_low_value_invoices(invoice_filter, sap, sender):
+    invoice_filter.low_value_invoices.return_value = []
+
+    sender.send_low_valued_invoices()
+
+    sap.send.assert_not_called()                                         # 一次都不应该调用
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.test.ts"><pre>
+import { beforeEach, test, expect, vi } from "vitest";
+import { Invoice } from "./invoices";
+import { SAPInvoiceSender } from "./sapInvoiceSender";
+
+let filter: { lowValueInvoices: ReturnType&lt;typeof vi.fn&lt;() =&gt; Invoice[]&gt;&gt; };
+let sap: { send: ReturnType&lt;typeof vi.fn&lt;(invoice: Invoice) =&gt; void&gt;&gt; };
+let sender: SAPInvoiceSender;
+
+beforeEach(() =&gt; {                        // 每个测试都用全新的替身
+  filter = { lowValueInvoices: vi.fn() };
+  sap = { send: vi.fn() };
+  sender = new SAPInvoiceSender(filter, sap);
+});
+
+test("send to SAP", () =&gt; {
+  const mauricio = { customer: "Mauricio", value: 20 };
+  const frank = { customer: "Frank", value: 99 };
+  filter.lowValueInvoices.mockReturnValue([mauricio, frank]);   // 桩
+
+  sender.sendLowValuedInvoices();
+
+  expect(sap.send).toHaveBeenCalledWith(mauricio);              // Mock：验证交互
+  expect(sap.send).toHaveBeenCalledWith(frank);
+});
+
+test("no low value invoices", () =&gt; {
+  filter.lowValueInvoices.mockReturnValue([]);
+
+  sender.sendLowValuedInvoices();
+
+  expect(sap.send).not.toHaveBeenCalled();                      // 一次都不应该调用
+});
+</pre></div>
+</div>
+
+<p>想看它失败？把 <code>sap.send()</code> 那一行注释掉。Mockito 会说：</p>
+
+<div class="code" data-lang="text" data-file="Mockito 的验证失败信息"><pre>
+Wanted but not invoked:
+sap.send(
+    Invoice{customer='Mauricio', value=20}
+);
+Actually, there were zero interactions with this mock.
+</pre></div>
+
+<p>它期望 send 以 Mauricio 的发票被调用，但没有；还贴心地补充说「这个 Mock 上一次交互都没有」，帮你调试。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="桩提供间接输入，Mock 检查间接输出">
+  <rect class="bx" x="20" y="60" width="110" height="70" rx="10"/>
+  <text class="ttl" x="75" y="90" text-anchor="middle">测试</text>
+  <text class="sm" x="75" y="110" text-anchor="middle">事后 verify</text>
+  <path class="ln" d="M132 95 H236" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="240" y="30" width="200" height="130" rx="10"/>
+  <text class="ttl on-b" x="340" y="90" text-anchor="middle">SAPInvoiceSender</text>
+  <text class="sm" x="340" y="110" text-anchor="middle">被测类</text>
+
+  <rect class="bx-b" x="520" y="14" width="220" height="60" rx="10"/>
+  <text class="ttl on-b" x="630" y="38" text-anchor="middle">InvoiceFilter → Stub</text>
+  <text class="sm" x="630" y="58" text-anchor="middle">提供间接输入：返回发票列表</text>
+  <path class="ln-b" d="M516 44 H444" marker-end="url(#ar-b)"/>
+
+  <rect class="bx-a" x="520" y="116" width="220" height="60" rx="10"/>
+  <text class="ttl on-a" x="630" y="140" text-anchor="middle">SAP → Mock</text>
+  <text class="sm" x="630" y="160" text-anchor="middle">记录间接输出：调了几次、参数是啥</text>
+  <path class="ln-a" d="M444 146 H516" marker-end="url(#ar-a)"/>
+  <path class="ln-d" d="M630 178 V186 H75 V134"/>
+  <text class="sm" x="360" y="184" text-anchor="middle">测试向 Mock 询问：交互符合预期吗？</text>
+</svg>
+<figcaption>图 6-5　同一个测试里，一个依赖当桩用，另一个依赖当 Mock 用</figcaption>
+</figure>
+
+<p><strong>Stub 和 Mock 的主要区别：</strong>Stub 是给方法调用返回写死的值；Mock 不仅定义方法做什么，还<strong>显式定义与它的交互应该是什么样的</strong>。还可以写更严格的期望：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="更多 Mockito 期望"><pre>
+verify(sap, times(2)).send(any(Invoice.class));   // send 恰好被调用 2 次（任意发票）
+verify(sap, times(1)).send(mauricio);             // 以 mauricio 调用恰好 1 次
+verify(sap, times(1)).send(frank);                // 以 frank 调用恰好 1 次
+</pre></div>
+<div class="code" data-lang="python" data-file="更多 unittest.mock 期望"><pre>
+from unittest.mock import call
+
+assert sap.send.call_count == 2                                  # 恰好 2 次
+sap.send.assert_has_calls([call(mauricio), call(frank)],         # 以这两张发票各调一次
+                          any_order=True)
+</pre></div>
+<div class="code" data-lang="ts" data-file="更多 Vitest 期望"><pre>
+expect(sap.send).toHaveBeenCalledTimes(2);          // 恰好 2 次
+expect(sap.send).toHaveBeenNthCalledWith(1, mauricio);
+expect(sap.send).toHaveBeenNthCalledWith(2, frank);
+</pre></div>
+</div>
+
+<h3>命令查询分离：什么时候 Stub，什么时候 Mock</h3>
+
+<p>
+  为什么不把「发给 SAP」直接放进 InvoiceFilter？那样 lowValueInvoices 就同时是<strong>命令</strong>和<strong>查询</strong>了，会让调用它的人困惑。
+  把两者分开（Command-Query Separation，CQS）的一个好处是：从 Mock 的角度，你立刻知道该怎么做。
+</p>
+
+<div class="vs">
+  <div class="new"><div class="h">查询（Query）→ Stub 它</div>
+    <div style="padding:10px 14px">返回值，不改变对象状态。例如 <code>lowValueInvoices()</code>。你关心的是它<em>返回什么</em>，所以给它配置返回值。</div></div>
+  <div class="new"><div class="h">命令（Command）→ Mock 它</div>
+    <div style="padding:10px 14px">改变外部世界，通常没有有意义的返回值。例如 <code>sap.send()</code>。你关心的是它<em>有没有被正确调用</em>，所以验证交互。</div></div>
+</div>
+
+<p>越写测试越会发现：<strong>代码越好，越容易测</strong>。第 7 章会讨论如何在生产代码中做出方便测试的决定。关于 Mock 和 Stub 的区别，推荐 Martin Fowler 的《Mocks Aren't Stubs》（2007）。</p>
+
+<h2 id="captor">捕获参数</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求变更</div>
+  <p>SAP 不再直接接收 Invoice，而是要求另一种格式：客户名、发票金额、一个生成的 ID。ID 格式为 <code>&lt;日期&gt;&lt;客户代码&gt;</code>：</p>
+  <ul>
+    <li>日期总是 <code>MMddyyyy</code> 格式（月、日、四位年份）；</li>
+    <li>客户代码是客户名的前两个字符；如果名字不足两个字符，则为 <code>"X"</code>。</li>
+  </ul>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/arguments/SAPInvoiceSender.java"><pre>
+public class SapInvoice {                 // 新格式
+  private final String customer;
+  private final int value;
+  private final String id;
+  // 构造函数、getter、equals/hashCode……
+}
+
+public interface SAP {
+  void send(SapInvoice invoice);          // SAP 现在接收 SapInvoice
+}
+
+public class SAPInvoiceSender {
+  // 字段和构造函数同前……
+
+  public void sendLowValuedInvoices() {
+    List&lt;Invoice&gt; lowValuedInvoices = filter.lowValueInvoices();
+    for (Invoice invoice : lowValuedInvoices) {
+      String customer = invoice.getCustomer();
+      int value = invoice.getValue();
+      String sapId = generateId(invoice);
+
+      SapInvoice sapInvoice = new SapInvoice(customer, value, sapId);   // 在方法内部创建
+      sap.send(sapInvoice);
+    }
+  }
+
+  private String generateId(Invoice invoice) {
+    String date = LocalDate.now().format(DateTimeFormatter.ofPattern("MMddyyyy"));
+    String customer = invoice.getCustomer();
+    return date + (customer.length() &gt;= 2 ? customer.substring(0, 2) : "X");
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="sap_invoice_sender.py（新格式）"><pre>
+from dataclasses import dataclass
+from datetime import date
+
+@dataclass(frozen=True)
+class SapInvoice:                         # 新格式
+    customer: str
+    value: int
+    id: str
+
+class SAPInvoiceSender:
+    # __init__ 同前……
+
+    def send_low_valued_invoices(self) -&gt; None:
+        for invoice in self._filter.low_value_invoices():
+            sap_invoice = SapInvoice(invoice.customer, invoice.value,
+                                     self._generate_id(invoice))   # 在方法内部创建
+            self._sap.send(sap_invoice)
+
+    def _generate_id(self, invoice) -&gt; str:
+        today = date.today().strftime("%m%d%Y")                    # MMddyyyy
+        c = invoice.customer
+        return today + (c[:2] if len(c) &gt;= 2 else "X")
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.ts（新格式）"><pre>
+export interface SapInvoice {             // 新格式
+  customer: string;
+  value: number;
+  id: string;
+}
+
+export interface SAP {
+  send(invoice: SapInvoice): void;        // SAP 现在接收 SapInvoice
+}
+
+export const mmddyyyy = (d: Date) =&gt;
+  String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0") + d.getFullYear();
+
+export class SAPInvoiceSender {
+  constructor(private readonly filter: Pick&lt;InvoiceFilter, "lowValueInvoices"&gt;,
+              private readonly sap: SAP) {}
+
+  sendLowValuedInvoices(): void {
+    for (const invoice of this.filter.lowValueInvoices()) {
+      const sapInvoice: SapInvoice = {                               // 在方法内部创建
+        customer: invoice.customer,
+        value: invoice.value,
+        id: this.generateId(invoice),
+      };
+      this.sap.send(sapInvoice);
+    }
+  }
+
+  private generateId(invoice: Invoice): string {
+    const c = invoice.customer;
+    return mmddyyyy(new Date()) + (c.length &gt;= 2 ? c.substring(0, 2) : "X");
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  用 <code>verify(sap).send(any(SapInvoice.class))</code> 只能证明「发了<em>某个</em> SapInvoice」—— 可哪一个？ID 对不对？
+  一个办法是把转换逻辑抽成独立的 <code>InvoiceToSapInvoiceConverter</code>，它不依赖任何复杂的类，可以直接用普通单元测试（留作练习）。
+  但假设我们不能重构，就要用 Mock 框架的另一个功能：<strong>参数捕获</strong> —— 把传给 Mock 的对象「抓」出来，再对它做普通的断言。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="参数捕获：被测方法内部创建的对象传给 Mock 时被截获，测试再对它断言">
+  <rect class="bx-b" x="20" y="40" width="220" height="80" rx="10"/>
+  <text class="ttl on-b" x="130" y="66" text-anchor="middle">sendLowValuedInvoices()</text>
+  <text class="sm" x="130" y="88" text-anchor="middle">内部 new SapInvoice(…)</text>
+  <text class="sm" x="130" y="104" text-anchor="middle">不返回给调用者</text>
+  <path class="ln" d="M242 80 H356" marker-end="url(#ar)"/>
+  <text class="sm" x="299" y="70" text-anchor="middle">send(sapInvoice)</text>
+  <rect class="bx-a" x="360" y="40" width="160" height="80" rx="10"/>
+  <text class="ttl on-a" x="440" y="70" text-anchor="middle">SAP Mock</text>
+  <text class="sm" x="440" y="92" text-anchor="middle">记下了参数 📸</text>
+  <path class="ln-g" d="M522 80 H576" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="549" y="70" text-anchor="middle">capture</text>
+  <rect class="bx-g" x="580" y="40" width="160" height="80" rx="10"/>
+  <text class="ttl on-g" x="660" y="66" text-anchor="middle">测试拿到对象</text>
+  <text class="mono" x="660" y="90" text-anchor="middle">id == 日期+"Ma"</text>
+  <text class="sm" x="660" y="108" text-anchor="middle">普通断言</text>
+</svg>
+<figcaption>图 6-6　参数捕获：断言那些「在方法内部创建、传给依赖、却不返回」的对象</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/arguments/SAPInvoiceSenderTest.java"><pre>
+@ParameterizedTest
+@CsvSource({                                   // 两个用例：长名字和不足两个字符的名字
+    "Mauricio,Ma",
+    "M,X"})
+void sendToSapWithTheGeneratedId(String customer, String customerCode) {
+  Invoice mauricio = new Invoice(customer, 20);
+  List&lt;Invoice&gt; invoices = Arrays.asList(mauricio);
+  when(filter.lowValueInvoices()).thenReturn(invoices);
+
+  sender.sendLowValuedInvoices();
+
+  ArgumentCaptor&lt;SapInvoice&gt; captor = ArgumentCaptor.forClass(SapInvoice.class);
+  verify(sap).send(captor.capture());          // 验证的同时把参数捕获下来
+  SapInvoice generatedSapInvoice = captor.getValue();
+
+  String date = LocalDate.now().format(DateTimeFormatter.ofPattern("MMddyyyy"));
+  assertThat(generatedSapInvoice)
+      .isEqualTo(new SapInvoice(customer, 20, date + customerCode));
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_sap_invoice_sender.py（捕获参数）"><pre>
+from datetime import date
+import pytest
+
+@pytest.mark.parametrize("customer, customer_code", [
+    ("Mauricio", "Ma"),                         # 长名字
+    ("M", "X"),                                 # 不足两个字符
+])
+def test_send_to_sap_with_the_generated_id(invoice_filter, sap, sender,
+                                           customer, customer_code):
+    invoice_filter.low_value_invoices.return_value = [Invoice(customer, 20)]
+
+    sender.send_low_valued_invoices()
+
+    sap.send.assert_called_once()
+    generated = sap.send.call_args.args[0]      # 最近一次调用的第一个位置参数
+
+    today = date.today().strftime("%m%d%Y")
+    assert generated == SapInvoice(customer, 20, today + customer_code)
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.test.ts（捕获参数）"><pre>
+test.each([
+  ["Mauricio", "Ma"],                           // 长名字
+  ["M", "X"],                                   // 不足两个字符
+])("send to SAP with the generated id (%s)", (customer, customerCode) =&gt; {
+  filter.lowValueInvoices.mockReturnValue([{ customer, value: 20 }]);
+
+  sender.sendLowValuedInvoices();
+
+  expect(sap.send).toHaveBeenCalledTimes(1);
+  const generated = sap.send.mock.calls[0][0];  // 第 1 次调用的第 1 个参数
+
+  expect(generated).toEqual({ customer, value: 20, id: mmddyyyy(new Date()) + customerCode });
+});
+</pre></div>
+</div>
+
+<p>
+  有两个用例：名字长于两个字符，和短于两个字符。结构相同，所以用了参数化测试（Java 用 <code>@CsvSource</code> 以逗号分隔的方式内联传参，输入简单时很方便）。
+  作者说，尽管他的首选总是重构到能写简单的单元测试，但他<strong>经常</strong>用参数捕获：现实中很多类的主要工作就是在组件之间协调数据流，需要断言的对象在方法里临时创建、并不返回给调用者。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 还缺两个测试</div>
+  <ul>
+    <li><strong>边界：</strong>名字长度 2 是边界，应该再测一个恰好两个字符的名字（比如 "Mo"）。用了 Mock，所有测试设计技术照样适用。</li>
+    <li><strong>午夜问题：</strong>测试自己又调了一次「今天」来算期望值。如果测试恰好在午夜前后运行，两次「今天」可能不是同一天，测试就会莫名失败。
+      这是一个<em>不稳定测试（flaky test）</em>的种子 —— 下面的 <a href="#clock">「日期和时间」</a>一节给出了根治办法。</li>
+  </ul>
+</div>
+
+<h2 id="exceptions">模拟异常</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>SAP 的 send 可能抛出 SAPException。系统应返回发送失败的发票列表。一次失败不应让程序停止，而要继续尝试发送所有发票。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/exception/SAPInvoiceSender.java"><pre>
+public List&lt;Invoice&gt; sendLowValuedInvoices() {
+  List&lt;Invoice&gt; failedInvoices = new ArrayList&lt;&gt;();
+
+  List&lt;Invoice&gt; lowValuedInvoices = filter.lowValueInvoices();
+  for (Invoice invoice : lowValuedInvoices) {
+    String customer = invoice.getCustomer();
+    int value = invoice.getValue();
+    String sapId = generateId(invoice);
+    SapInvoice sapInvoice = new SapInvoice(customer, value, sapId);
+
+    try {
+      sap.send(sapInvoice);
+    } catch (SAPException e) {
+      failedInvoices.add(invoice);       // 失败了就记下来，继续下一张
+    }
+  }
+  return failedInvoices;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="sap_invoice_sender.py（处理异常）"><pre>
+class SAPException(Exception):
+    pass
+
+class SAPInvoiceSender:
+    # __init__、_generate_id 同前……
+
+    def send_low_valued_invoices(self) -&gt; list[Invoice]:
+        failed = []
+        for invoice in self._filter.low_value_invoices():
+            sap_invoice = SapInvoice(invoice.customer, invoice.value,
+                                     self._generate_id(invoice))
+            try:
+                self._sap.send(sap_invoice)
+            except SAPException:
+                failed.append(invoice)       # 失败了就记下来，继续下一张
+        return failed
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.ts（处理异常）"><pre>
+export class SAPException extends Error {}
+
+export class SAPInvoiceSender {
+  // 构造函数、generateId 同前……
+
+  sendLowValuedInvoices(): Invoice[] {
+    const failed: Invoice[] = [];
+    for (const invoice of this.filter.lowValueInvoices()) {
+      const sapInvoice = { customer: invoice.customer, value: invoice.value,
+                           id: this.generateId(invoice) };
+      try {
+        this.sap.send(sapInvoice);
+      } catch (e) {
+        if (!(e instanceof SAPException)) throw e;   // 只吞 SAP 的异常
+        failed.push(invoice);                        // 失败了就记下来，继续下一张
+      }
+    }
+    return failed;
+  }
+}
+</pre></div>
+</div>
+
+<p>怎么测？让 Mock 对其中一张发票抛异常就行：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="三张发票依次发送，Frank 的发送抛出异常，Steve 的仍然被发送，返回失败列表只含 Frank">
+  <rect class="bx-g" x="20" y="30" width="160" height="50" rx="8"/>
+  <text class="ttl on-g" x="100" y="52" text-anchor="middle">Mauricio 20</text>
+  <text class="sm" x="100" y="70" text-anchor="middle">send ✔</text>
+  <path class="ln" d="M182 55 H226" marker-end="url(#ar)"/>
+  <rect class="bx-r" x="230" y="30" width="160" height="50" rx="8"/>
+  <text class="ttl on-r" x="310" y="52" text-anchor="middle">Frank 25</text>
+  <text class="sm on-r" x="310" y="70" text-anchor="middle">send 💥 SAPException</text>
+  <path class="ln" d="M392 55 H436" marker-end="url(#ar)"/>
+  <text class="sm" x="414" y="46" text-anchor="middle">继续</text>
+  <rect class="bx-g" x="440" y="30" width="160" height="50" rx="8"/>
+  <text class="ttl on-g" x="520" y="52" text-anchor="middle">Steve 48</text>
+  <text class="sm" x="520" y="70" text-anchor="middle">send ✔</text>
+  <path class="ln" d="M602 55 H636" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="640" y="30" width="100" height="50" rx="8"/>
+  <text class="ttl on-a" x="690" y="52" text-anchor="middle">返回</text>
+  <text class="mono" x="690" y="70" text-anchor="middle">[frank]</text>
+  <text class="lbl" x="380" y="118" text-anchor="middle">断言 1：返回的失败列表恰好是 [frank]</text>
+  <text class="lbl" x="380" y="142" text-anchor="middle">断言 2：Mauricio 和 Steve（在 Frank 之后！）的发票都被发送了 —— 「失败不应让程序停止」</text>
+</svg>
+<figcaption>图 6-7　用 Mock 模拟一次失败，检验系统在意外情况下的行为</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/exception/SAPInvoiceSenderTest.java"><pre>
+@Test
+void returnFailedInvoices() {
+  Invoice mauricio = new Invoice("Mauricio", 20);
+  Invoice frank = new Invoice("Frank", 25);
+  Invoice steve = new Invoice("Steve", 48);
+  List&lt;Invoice&gt; invoices = Arrays.asList(mauricio, frank, steve);
+  when(filter.lowValueInvoices()).thenReturn(invoices);
+
+  String date = LocalDate.now().format(DateTimeFormatter.ofPattern("MMddyyyy"));
+  SapInvoice franksInvoice = new SapInvoice("Frank", 25, date + "Fr");
+  doThrow(new SAPException()).when(sap).send(franksInvoice);   // 收到 Frank 的发票时抛异常
+
+  List&lt;Invoice&gt; failedInvoices = sender.sendLowValuedInvoices();
+  assertThat(failedInvoices).containsExactly(frank);
+
+  SapInvoice mauriciosInvoice = new SapInvoice("Mauricio", 20, date + "Ma");
+  verify(sap).send(mauriciosInvoice);
+  SapInvoice stevesInvoice = new SapInvoice("Steve", 48, date + "St");
+  verify(sap).send(stevesInvoice);                             // Frank 之后的也发了
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_sap_invoice_sender.py（模拟异常）"><pre>
+def test_return_failed_invoices(invoice_filter, sap, sender):
+    mauricio = Invoice("Mauricio", 20)
+    frank = Invoice("Frank", 25)
+    steve = Invoice("Steve", 48)
+    invoice_filter.low_value_invoices.return_value = [mauricio, frank, steve]
+
+    today = date.today().strftime("%m%d%Y")
+    franks_invoice = SapInvoice("Frank", 25, today + "Fr")
+
+    def fail_for_frank(sap_invoice):            # side_effect：每次调用都会执行它
+        if sap_invoice == franks_invoice:
+            raise SAPException()
+    sap.send.side_effect = fail_for_frank
+
+    failed = sender.send_low_valued_invoices()
+    assert failed == [frank]
+
+    sap.send.assert_any_call(SapInvoice("Mauricio", 20, today + "Ma"))
+    sap.send.assert_any_call(SapInvoice("Steve", 48, today + "St"))   # Frank 之后的也发了
+</pre></div>
+<div class="code" data-lang="ts" data-file="sapInvoiceSender.test.ts（模拟异常）"><pre>
+test("return failed invoices", () =&gt; {
+  const mauricio = { customer: "Mauricio", value: 20 };
+  const frank = { customer: "Frank", value: 25 };
+  const steve = { customer: "Steve", value: 48 };
+  filter.lowValueInvoices.mockReturnValue([mauricio, frank, steve]);
+
+  const today = mmddyyyy(new Date());
+  sap.send.mockImplementation((inv) =&gt; {          // 收到 Frank 的发票时抛异常
+    if (inv.id === today + "Fr") throw new SAPException();
+  });
+
+  const failed = sender.sendLowValuedInvoices();
+  expect(failed).toEqual([frank]);
+
+  expect(sap.send).toHaveBeenCalledWith({ customer: "Mauricio", value: 20, id: today + "Ma" });
+  expect(sap.send).toHaveBeenCalledWith({ customer: "Steve", value: 48, id: today + "St" });  // Frank 之后的也发了
+});
+</pre></div>
+</div>
+
+<p>
+  让 Mock 抛异常，能让我们测试系统在意外情况下的行为。这对与外部系统交互的软件太重要了：一个 Web 服务宕机一秒钟，你的应用还能正确工作吗？
+  不用 Mock，你要怎么让真实的 Web 服务 API 抛异常？那比告诉 Mock「抛」难多了。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 测试代码也是代码</div>
+  <p>每次都要取当前日期、格式化成 MMddyyyy、再拼上名字前两个字母 —— 创建 SapInvoice 越来越痛苦。把这些逻辑抽成辅助方法或辅助类吧。<strong>测试代码和生产代码一样重要</strong>，写生产代码时遵循的最佳实践，写测试代码时也要遵循（第 10 章）。</p>
+</div>
+
+<h2 id="downsides">Mock 的代价</h2>
+
+<p>有人是 Mock 的铁粉，有人坚决反对。事实是：<strong>Mock 让测试变得不那么真实</strong>。两个主要缺点：</p>
+
+<h3>1. 你可能在测 Mock，而不是代码</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="契约漂移：B 的后置条件改变了，但 A 测试中的 Mock 仍按旧契约返回，A 的测试依然通过">
+  <text class="ttl" x="190" y="22" text-anchor="middle">几个月前</text>
+  <rect class="bx" x="40" y="40" width="100" height="50" rx="8"/><text class="ttl" x="90" y="70" text-anchor="middle">A</text>
+  <path class="ln" d="M142 65 H216" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="220" y="40" width="140" height="50" rx="8"/>
+  <text class="ttl on-g" x="290" y="62" text-anchor="middle">B.sum()</text>
+  <text class="sm" x="290" y="80" text-anchor="middle">后置：总是 ≥ 0</text>
+  <rect class="bx-d" x="40" y="110" width="320" height="50" rx="8"/>
+  <text class="lbl" x="200" y="132" text-anchor="middle">ATest 里 Mock 了 B：sum() 返回 5</text>
+  <text class="sm on-g" x="200" y="150" text-anchor="middle">✔ 通过，也符合事实</text>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">今天</text>
+  <rect class="bx" x="420" y="40" width="100" height="50" rx="8"/><text class="ttl" x="470" y="70" text-anchor="middle">A</text>
+  <path class="ln" d="M522 65 H596" marker-end="url(#ar)"/>
+  <rect class="bx-r" x="600" y="40" width="140" height="50" rx="8"/>
+  <text class="ttl on-r" x="670" y="62" text-anchor="middle">B.sum()</text>
+  <text class="sm" x="670" y="80" text-anchor="middle">后置改了：可能 &lt; 0</text>
+  <rect class="bx-d" x="420" y="110" width="320" height="50" rx="8"/>
+  <text class="lbl" x="580" y="132" text-anchor="middle">ATest 里的 Mock 还是返回 5</text>
+  <text class="sm on-r" x="580" y="150" text-anchor="middle">✔ 依然通过 —— 但 A 可能已经坏了！</text>
+  <text class="sm" x="380" y="196" text-anchor="middle">Mock 不知道 B 变了。大型系统里，很容易失去对 Mock 的控制：它们可能不再代表真实类的契约</text>
+</svg>
+<figcaption>图 6-8　契约漂移：B 的契约变了，A 的 Mock 却停留在过去</figcaption>
+</figure>
+
+<p>
+  要让 Mock 在大规模下工作良好，开发者必须设计<strong>谨慎且（希望是）稳定的契约</strong>。契约设计良好且稳定，你就不必害怕 Mock。
+  况且，不管有没有 Mock，找到契约变化的所有依赖方、检查新契约是否被覆盖，本来就是开发者的工作。
+</p>
+
+<h3>2. 测试和实现耦合更紧</h3>
+<p>
+  不用 Mock 的测试调用方法、断言输出，对方法的内部实现一无所知。用了 Mock 的测试则知道不少：SAPInvoiceSender 的测试知道它用了 InvoiceFilter 的 lowValueInvoices，知道每张发票都要调 SAP 的 send。
+  如果开发者改变了 SAPInvoiceSender 的实现方式（比如不再用 InvoiceFilter），测试可能也得跟着改。作者和同事的实证研究（Spadini 等，2019）也观察到了这一点。
+</p>
+<p>
+  能避免吗？不太能，但至少你意识到了。有趣的是，作者反而<em>欣赏</em>这种耦合：当他改变一个类与其他类的交互方式时，测试会坏掉，这逼他反思自己的改动。当然，不是每个小改动都会让测试坏掉，他也不是处处都用 Mock。<strong>用得恰当，这种耦合就不是大问题</strong>。
+</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 把 Mock 当作设计技术时</div>
+  <p>上面说的「耦合」是从测试角度：「代码已经写好了，来测它吧」。如果你像 Freeman 和 Pryce 那样把 Mock 当作<strong>设计</strong>代码的方式，就要换个角度看：你<em>希望</em> Mock 和被测代码耦合，因为你关心的正是代码如何完成工作。代码变了，你就希望 Mock 也跟着变。</p>
+</div>
+
+<h2 id="what-to-mock">该 Mock 什么，不该 Mock 什么</h2>
+
+<p>用真实依赖的测试比用替身的更真实，也更可能发现真实的 Bug。所以不要 Mock 不该 Mock 的东西。作者的经验（和他后来的实证研究结论惊人地一致）：</p>
+
+<div class="vs">
+  <div class="new"><div class="h">✔ 通常 Mock / Stub</div>
+    <div style="padding:10px 14px">
+      <p style="margin-top:0"><strong>太慢的依赖</strong>：访问数据库、Web 服务的类。（这些类本身仍然要用集成测试。）</p>
+      <p><strong>与外部基础设施通信的依赖</strong>：搭环境太慢太复杂。</p>
+      <p style="margin-bottom:0"><strong>难以模拟的情况</strong>：比如让依赖抛异常。</p>
+    </div></div>
+  <div class="old"><div class="h">✘ 通常不 Mock</div>
+    <div style="padding:10px 14px">
+      <p style="margin-top:0"><strong>实体</strong>：Invoice、ShoppingCart 这类代表业务概念的类，直接 new 更简单。（例外：依赖十几个其他实体的「重型」实体，Mock 它可能更省事。）</p>
+      <p><strong>语言自带的库和工具方法</strong>：为什么要 Mock ArrayList 或 String.format？</p>
+      <p style="margin-bottom:0"><strong>足够简单的东西</strong>：如果你觉得一个类简单到不值得 Mock，那它多半就是。</p>
+    </div></div>
+</div>
+
+<h3>例子：书店</h3>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>给定一组书及其数量，返回购物车总价。如果书店没有足够的库存，就把现有的全部放进购物车，并告诉用户缺了哪些。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/bookstore/BookStore.java"><pre>
+class BookStore {
+  private BookRepository bookRepository;     // 已知要 Mock，所以注入
+  private BuyBookProcess process;
+
+  public BookStore(BookRepository bookRepository, BuyBookProcess process) {
+    this.bookRepository = bookRepository;
+    this.process = process;
+  }
+
+  private void retrieveBook(String ISBN, int amount, Overview overview) {
+    Book book = bookRepository.findByISBN(ISBN);
+    if (book.getAmount() &lt; amount) {                       // 库存不够：记下缺了多少
+      overview.addUnavailable(book, amount - book.getAmount());
+      amount = book.getAmount();
+    }
+    overview.addToTotalPrice(amount * book.getPrice());    // 能买的都算进总价
+    process.buyBook(book, amount);                         // 通知购买流程
+  }
+
+  public Overview getPriceForCart(Map&lt;String, Integer&gt; order) {
+    if (order == null)
+      return null;
+
+    Overview overview = new Overview();
+    for (String ISBN : order.keySet())
+      retrieveBook(ISBN, order.get(ISBN), overview);
+    return overview;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="bookstore.py"><pre>
+from dataclasses import dataclass, field
+from typing import Protocol
+
+@dataclass(frozen=True)
+class Book:
+    isbn: str
+    price: int
+    amount: int
+
+@dataclass
+class Overview:
+    total_price: int = 0
+    unavailable: dict[Book, int] = field(default_factory=dict)
+
+class BookRepository(Protocol):
+    def find_by_isbn(self, isbn: str) -&gt; Book: ...
+
+class BuyBookProcess(Protocol):
+    def buy_book(self, book: Book, amount: int) -&gt; None: ...
+
+class BookStore:
+    def __init__(self, book_repository: BookRepository, process: BuyBookProcess):
+        self._repo = book_repository             # 已知要 Mock，所以注入
+        self._process = process
+
+    def _retrieve_book(self, isbn: str, amount: int, overview: Overview) -&gt; None:
+        book = self._repo.find_by_isbn(isbn)
+        if book.amount &lt; amount:                     # 库存不够：记下缺了多少
+            overview.unavailable[book] = amount - book.amount
+            amount = book.amount
+        overview.total_price += amount * book.price  # 能买的都算进总价
+        self._process.buy_book(book, amount)         # 通知购买流程
+
+    def get_price_for_cart(self, order: dict[str, int] | None) -&gt; Overview | None:
+        if order is None:
+            return None
+        overview = Overview()
+        for isbn, amount in order.items():
+            self._retrieve_book(isbn, amount, overview)
+        return overview
+</pre></div>
+<div class="code" data-lang="ts" data-file="bookStore.ts"><pre>
+export class Book {
+  constructor(readonly isbn: string, readonly price: number, readonly amount: number) {}
+}
+
+export class Overview {
+  totalPrice = 0;
+  readonly unavailable = new Map&lt;Book, number&gt;();
+}
+
+export interface BookRepository { findByISBN(isbn: string): Book }
+export interface BuyBookProcess { buyBook(book: Book, amount: number): void }
+
+export class BookStore {
+  constructor(private readonly bookRepository: BookRepository,   // 已知要 Mock，所以注入
+              private readonly process: BuyBookProcess) {}
+
+  private retrieveBook(isbn: string, amount: number, overview: Overview): void {
+    const book = this.bookRepository.findByISBN(isbn);
+    if (book.amount &lt; amount) {                        // 库存不够：记下缺了多少
+      overview.unavailable.set(book, amount - book.amount);
+      amount = book.amount;
+    }
+    overview.totalPrice += amount * book.price;        // 能买的都算进总价
+    this.process.buyBook(book, amount);                // 通知购买流程
+  }
+
+  getPriceForCart(order: Map&lt;string, number&gt; | null): Overview | null {
+    if (order == null) return null;
+    const overview = new Overview();
+    for (const [isbn, amount] of order) this.retrieveBook(isbn, amount, overview);
+    return overview;
+  }
+}
+</pre></div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="BookStore 的依赖中，BookRepository 和 BuyBookProcess 该 Mock，Book、Overview、Map 不该 Mock">
+  <rect class="bx-b" x="300" y="90" width="160" height="56" rx="12"/>
+  <text class="ttl on-b" x="380" y="116" text-anchor="middle">BookStore</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">被测类</text>
+
+  <rect class="bx-a" x="20" y="20" width="220" height="64" rx="10"/>
+  <text class="ttl on-a" x="130" y="44" text-anchor="middle">BookRepository → Mock</text>
+  <text class="sm" x="130" y="64" text-anchor="middle">发 SQL、解析结果：搭数据库太痛苦</text>
+  <rect class="bx-a" x="20" y="150" width="220" height="64" rx="10"/>
+  <text class="ttl on-a" x="130" y="174" text-anchor="middle">BuyBookProcess → Mock</text>
+  <text class="sm" x="130" y="194" text-anchor="middle">听起来很复杂，值得有自己的测试</text>
+  <path class="ln-a" d="M242 60 L298 104" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M242 176 L298 134" marker-end="url(#ar-a)"/>
+
+  <rect class="bx-g" x="520" y="14" width="220" height="56" rx="10"/>
+  <text class="ttl on-g" x="630" y="38" text-anchor="middle">Book → 真实对象</text>
+  <text class="sm" x="630" y="56" text-anchor="middle">简单的实体，直接 new</text>
+  <rect class="bx-g" x="520" y="90" width="220" height="56" rx="10"/>
+  <text class="ttl on-g" x="630" y="114" text-anchor="middle">Overview → 真实对象</text>
+  <text class="sm" x="630" y="132" text-anchor="middle">普通的数据对象</text>
+  <rect class="bx-g" x="520" y="166" width="220" height="56" rx="10"/>
+  <text class="ttl on-g" x="630" y="190" text-anchor="middle">Map → 真实对象</text>
+  <text class="sm" x="630" y="208" text-anchor="middle">语言自带的数据结构</text>
+  <path class="ln-g" d="M516 44 L462 104" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M516 118 H464" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M516 192 L462 134" marker-end="url(#ar-g)"/>
+</svg>
+<figcaption>图 6-9　只 Mock 必须 Mock 的东西</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/bookstore/BookStoreTest.java"><pre>
+@Test
+void moreComplexOrder() {
+  BookRepository bookRepo = mock(BookRepository.class);      // 该 Mock 的
+  BuyBookProcess process = mock(BuyBookProcess.class);
+
+  Map&lt;String, Integer&gt; orderMap = new HashMap&lt;&gt;();           // 不需要 Mock HashMap
+  orderMap.put("PRODUCT-ENOUGH-QTY", 5);                     // 库存充足
+  orderMap.put("PRODUCT-PRECISE-QTY", 10);                   // 库存恰好等于需求
+  orderMap.put("PRODUCT-NOT-ENOUGH", 22);                    // 库存不足
+
+  Book book1 = new Book("PRODUCT-ENOUGH-QTY", 20, 11);       // 11 &gt; 5
+  when(bookRepo.findByISBN("PRODUCT-ENOUGH-QTY")).thenReturn(book1);
+  Book book2 = new Book("PRODUCT-PRECISE-QTY", 25, 10);      // 10 == 10
+  when(bookRepo.findByISBN("PRODUCT-PRECISE-QTY")).thenReturn(book2);
+  Book book3 = new Book("PRODUCT-NOT-ENOUGH", 37, 21);       // 21 &lt; 22
+  when(bookRepo.findByISBN("PRODUCT-NOT-ENOUGH")).thenReturn(book3);
+
+  BookStore bookStore = new BookStore(bookRepo, process);
+  Overview overview = bookStore.getPriceForCart(orderMap);
+
+  int expectedPrice =
+      5*20 +      // 第一本
+      10*25 +     // 第二本
+      21*37;      // 第三本（只有 21 本可买）
+  assertThat(overview.getTotalPrice()).isEqualTo(expectedPrice);
+
+  verify(process).buyBook(book1, 5);                         // 购买流程以正确数量被调用
+  verify(process).buyBook(book2, 10);
+  verify(process).buyBook(book3, 21);
+
+  assertThat(overview.getUnavailable()).containsExactly(entry(book3, 1));   // 缺 1 本
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_bookstore.py"><pre>
+from unittest.mock import Mock
+from bookstore import Book, BookStore
+
+def test_more_complex_order():
+    book_repo = Mock()                                     # 该 Mock 的
+    process = Mock()
+
+    order = {                                              # 不需要 Mock dict
+        "PRODUCT-ENOUGH-QTY": 5,                           # 库存充足
+        "PRODUCT-PRECISE-QTY": 10,                         # 库存恰好等于需求
+        "PRODUCT-NOT-ENOUGH": 22,                          # 库存不足
+    }
+    book1 = Book("PRODUCT-ENOUGH-QTY", 20, 11)             # 11 &gt; 5
+    book2 = Book("PRODUCT-PRECISE-QTY", 25, 10)            # 10 == 10
+    book3 = Book("PRODUCT-NOT-ENOUGH", 37, 21)             # 21 &lt; 22
+    books = {b.isbn: b for b in (book1, book2, book3)}
+    book_repo.find_by_isbn.side_effect = books.__getitem__ # 按 ISBN 返回对应的书
+
+    overview = BookStore(book_repo, process).get_price_for_cart(order)
+
+    assert overview.total_price == 5 * 20 + 10 * 25 + 21 * 37
+    process.buy_book.assert_any_call(book1, 5)             # 购买流程以正确数量被调用
+    process.buy_book.assert_any_call(book2, 10)
+    process.buy_book.assert_any_call(book3, 21)
+    assert overview.unavailable == {book3: 1}              # 缺 1 本
+</pre></div>
+<div class="code" data-lang="ts" data-file="bookStore.test.ts"><pre>
+import { test, expect, vi } from "vitest";
+import { Book, BookStore } from "./bookStore";
+
+test("more complex order", () =&gt; {
+  const book1 = new Book("PRODUCT-ENOUGH-QTY", 20, 11);    // 11 &gt; 5
+  const book2 = new Book("PRODUCT-PRECISE-QTY", 25, 10);   // 10 == 10
+  const book3 = new Book("PRODUCT-NOT-ENOUGH", 37, 21);    // 21 &lt; 22
+  const books = new Map([book1, book2, book3].map((b) =&gt; [b.isbn, b]));
+
+  const bookRepo = { findByISBN: vi.fn((isbn: string) =&gt; books.get(isbn)!) };  // 该 Mock 的
+  const process = { buyBook: vi.fn() };
+
+  const order = new Map([                                  // 不需要 Mock Map
+    ["PRODUCT-ENOUGH-QTY", 5],                             // 库存充足
+    ["PRODUCT-PRECISE-QTY", 10],                           // 库存恰好等于需求
+    ["PRODUCT-NOT-ENOUGH", 22],                            // 库存不足
+  ]);
+
+  const overview = new BookStore(bookRepo, process).getPriceForCart(order)!;
+
+  expect(overview.totalPrice).toBe(5 * 20 + 10 * 25 + 21 * 37);
+  expect(process.buyBook).toHaveBeenCalledWith(book1, 5);  // 购买流程以正确数量被调用
+  expect(process.buyBook).toHaveBeenCalledWith(book2, 10);
+  expect(process.buyBook).toHaveBeenCalledWith(book3, 21);
+  expect(overview.unavailable).toEqual(new Map([[book3, 1]]));   // 缺 1 本
+});
+</pre></div>
+</div>
+
+<p>能把所有东西都 Mock 掉吗？能，但没有意义。只 Stub 和 Mock 必要的东西。每 Mock 一个，测试的真实性就降低一分 —— 理解这个权衡，由你决定。</p>
+
+<h2 id="clock">日期和时间：包一层</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>如果今天是圣诞节，订单总额打 85 折（减 15%）；其他日子不打折。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ChristmasDiscount（难测的版本）"><pre>
+public class ChristmasDiscount {
+  public double applyDiscount(double amount) {
+    LocalDate today = LocalDate.now();         // 静态调用：测试无法控制「今天」
+    double discountPercentage = 0;
+    boolean isChristmas = today.getMonth() == Month.DECEMBER
+        &amp;&amp; today.getDayOfMonth() == 25;
+    if (isChristmas)
+      discountPercentage = 0.15;
+    return amount - (amount * discountPercentage);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="christmas_discount.py（难测的版本）"><pre>
+from datetime import date
+
+class ChristmasDiscount:
+    def apply_discount(self, amount: float) -&gt; float:
+        today = date.today()                   # 测试无法控制「今天」
+        is_christmas = today.month == 12 and today.day == 25
+        discount = 0.15 if is_christmas else 0
+        return amount - amount * discount
+</pre></div>
+<div class="code" data-lang="ts" data-file="christmasDiscount.ts（难测的版本）"><pre>
+export class ChristmasDiscount {
+  applyDiscount(amount: number): number {
+    const today = new Date();                  // 测试无法控制「今天」
+    const isChristmas = today.getMonth() === 11 &amp;&amp; today.getDate() === 25;  // 月份从 0 开始！
+    const discount = isChristmas ? 0.15 : 0;
+    return amount - amount * discount;
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  逻辑很简单，天生适合单元测试。问题是：怎么让「今天」一会儿是圣诞节、一会儿不是？这和 InvoiceFilter 直接 new IssuedInvoices 是同一类问题。
+  一个流行的解决方案是把所有日期时间逻辑封装进一个类（常叫 <code>Clock</code>），系统其他部分需要时间时都通过它，它作为依赖注入，于是可以被 Stub：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="Clock 包装了系统时间，生产环境用真实时钟，测试中用返回固定日期的桩">
+  <rect class="bx-b" x="20" y="40" width="200" height="70" rx="10"/>
+  <text class="ttl on-b" x="120" y="70" text-anchor="middle">ChristmasDiscount</text>
+  <text class="mono" x="120" y="92" text-anchor="middle">clock.now()</text>
+  <path class="ln" d="M222 75 H296" marker-end="url(#ar)"/>
+  <rect class="bx" x="300" y="40" width="140" height="70" rx="10"/>
+  <text class="ttl" x="370" y="70" text-anchor="middle">Clock</text>
+  <text class="sm" x="370" y="92" text-anchor="middle">一层很薄的包装</text>
+  <path class="ln-g" d="M442 60 H536" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="489" y="52" text-anchor="middle">生产</text>
+  <rect class="bx-g" x="540" y="30" width="200" height="40" rx="8"/>
+  <text class="mono on-g" x="640" y="55" text-anchor="middle">LocalDate.now()</text>
+  <path class="ln-a" d="M442 92 H536" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="489" y="110" text-anchor="middle">测试</text>
+  <rect class="bx-a" x="540" y="78" width="200" height="40" rx="8"/>
+  <text class="mono on-a" x="640" y="103" text-anchor="middle">总是返回 2015-12-25</text>
+  <text class="sm" x="380" y="142" text-anchor="middle">Martin Fowler 的 wiki 里有个条目就叫 ClockWrapper，讲的正是这件事</text>
+</svg>
+<figcaption>图 6-10　把「现在几点」变成一个可以注入的依赖</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/christmas/Clock.java + ChristmasDiscount.java"><pre>
+public class Clock {
+  public LocalDate now() {
+    return LocalDate.now();          // 封装静态调用。看起来太简单，但想想你会往这里放的更复杂的操作
+  }
+  // 其他日期时间操作……
+}
+
+public class ChristmasDiscount {
+  private final Clock clock;
+
+  public ChristmasDiscount(Clock clock) {   // Clock 就是一个普通的依赖
+    this.clock = clock;
+  }
+
+  public double applyDiscount(double rawAmount) {
+    LocalDate today = clock.now();
+    double discountPercentage = 0;
+    boolean isChristmas = today.getMonth() == Month.DECEMBER
+        &amp;&amp; today.getDayOfMonth() == 25;
+    if (isChristmas)
+      discountPercentage = 0.15;
+    return rawAmount - (rawAmount * discountPercentage);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="christmas_discount.py"><pre>
+from datetime import date
+
+class Clock:
+    def now(self) -&gt; date:
+        return date.today()          # 封装系统时间
+    # 其他日期时间操作……
+
+class ChristmasDiscount:
+    def __init__(self, clock: Clock):    # Clock 就是一个普通的依赖
+        self._clock = clock
+
+    def apply_discount(self, raw_amount: float) -&gt; float:
+        today = self._clock.now()
+        is_christmas = today.month == 12 and today.day == 25
+        discount = 0.15 if is_christmas else 0
+        return raw_amount - raw_amount * discount
+</pre></div>
+<div class="code" data-lang="ts" data-file="christmasDiscount.ts"><pre>
+export class Clock {
+  now(): Date {
+    return new Date();               // 封装系统时间
+  }
+  // 其他日期时间操作……
+}
+
+export class ChristmasDiscount {
+  constructor(private readonly clock: Clock) {}   // Clock 就是一个普通的依赖
+
+  applyDiscount(rawAmount: number): number {
+    const today = this.clock.now();
+    const isChristmas = today.getMonth() === 11 &amp;&amp; today.getDate() === 25;
+    const discount = isChristmas ? 0.15 : 0;
+    return rawAmount - rawAmount * discount;
+  }
+}
+</pre></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch6/christmas/ChristmasDiscountTest.java"><pre>
+public class ChristmasDiscountTest {
+  private final Clock clock = mock(Clock.class);            // Clock 是桩
+  private final ChristmasDiscount cd = new ChristmasDiscount(clock);
+
+  @Test
+  public void christmas() {
+    LocalDate christmas = LocalDate.of(2015, Month.DECEMBER, 25);
+    when(clock.now()).thenReturn(christmas);                // 「今天」是圣诞节
+
+    double finalValue = cd.applyDiscount(100.0);
+    assertThat(finalValue).isCloseTo(85.0, offset(0.001));  // 浮点数用 isCloseTo
+  }
+
+  @Test
+  public void notChristmas() {
+    LocalDate notChristmas = LocalDate.of(2015, Month.DECEMBER, 26);
+    when(clock.now()).thenReturn(notChristmas);             // 「今天」不是圣诞节
+
+    double finalValue = cd.applyDiscount(100.0);
+    assertThat(finalValue).isCloseTo(100.0, offset(0.001));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_christmas_discount.py"><pre>
+from datetime import date
+from unittest.mock import Mock
+import pytest
+from christmas_discount import Clock, ChristmasDiscount
+
+@pytest.fixture
+def clock():
+    return Mock(spec=Clock)                                  # Clock 是桩
+
+def test_christmas(clock):
+    clock.now.return_value = date(2015, 12, 25)              # 「今天」是圣诞节
+    assert ChristmasDiscount(clock).apply_discount(100.0) == pytest.approx(85.0)
+
+def test_not_christmas(clock):
+    clock.now.return_value = date(2015, 12, 26)              # 「今天」不是圣诞节
+    assert ChristmasDiscount(clock).apply_discount(100.0) == pytest.approx(100.0)
+</pre></div>
+<div class="code" data-lang="ts" data-file="christmasDiscount.test.ts"><pre>
+import { test, expect, vi } from "vitest";
+import { ChristmasDiscount } from "./christmasDiscount";
+
+test("christmas", () =&gt; {
+  const clock = { now: vi.fn(() =&gt; new Date(2015, 11, 25)) };   // 「今天」是圣诞节（11 = 十二月）
+  expect(new ChristmasDiscount(clock).applyDiscount(100)).toBeCloseTo(85);
+});
+
+test("not christmas", () =&gt; {
+  const clock = { now: vi.fn(() =&gt; new Date(2015, 11, 26)) };   // 「今天」不是圣诞节
+  expect(new ChristmasDiscount(clock).applyDiscount(100)).toBeCloseTo(100);
+});
+</pre></div>
+</div>
+
+<p>那直接 Mock 静态方法 / 系统时间行不行？作为不改代码的备选方案，各语言都有工具：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="Mockito：mockStatic（不改生产代码）"><pre>
+@Test
+void christmasWithMockStatic() {
+  LocalDate christmas = LocalDate.of(2015, Month.DECEMBER, 25);
+  try (MockedStatic&lt;LocalDate&gt; mocked = mockStatic(LocalDate.class, CALLS_REAL_METHODS)) {
+    mocked.when(LocalDate::now).thenReturn(christmas);     // 只在 try 块内生效
+    assertThat(new ChristmasDiscount().applyDiscount(100.0)).isCloseTo(85.0, offset(0.001));
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="time-machine / freezegun（不改生产代码）"><pre>
+# pip install time-machine   （或 freezegun）
+import time_machine
+
+@time_machine.travel("2015-12-25")          # 在这个测试里，date.today() 就是圣诞节
+def test_christmas_with_time_travel():
+    assert ChristmasDiscount().apply_discount(100.0) == pytest.approx(85.0)
+</pre></div>
+<div class="code" data-lang="ts" data-file="Vitest 假计时器（不改生产代码）"><pre>
+import { afterEach, test, expect, vi } from "vitest";
+
+afterEach(() =&gt; vi.useRealTimers());
+
+test("christmas with fake timers", () =&gt; {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2015, 11, 25));   // new Date() 现在返回圣诞节
+  expect(new ChristmasDiscount().applyDiscount(100)).toBeCloseTo(85);
+});
+</pre></div>
+</div>
+
+<p>哪个更好？没有对错。如果系统里没有复杂的日期时间操作，直接 Mock 静态方法 / 系统时间完全可以 —— 务实总是对的。</p>
+
+<h2 id="dont-own">不要 Mock 不属于你的类型</h2>
+
+<p>Mock 框架强大到可以 Mock 任何库里的任何类。问题是：你<em>想</em>这么做吗？最佳实践是<strong>避免 Mock 不属于你的类型</strong>。假设你用了一个很贵的库，所以测试里 100% 都 Mock 它，长期下来：</p>
+<ul>
+  <li>库升级后行为变了，你<strong>不会有任何测试失败</strong> —— 它的全部行为都被 Mock 掉了，只能在生产环境发现。</li>
+  <li>Mock 外部库本身可能很难。想想 Hibernate 这类数据库访问库，Mock 它的所有 API 调用太复杂，测试很快变得难以维护。</li>
+</ul>
+
+<p>解决办法：<strong>在它上面建一层你自己的抽象</strong>，封装与该库的全部交互。前面的 Clock 就是一例 —— 我们不拥有时间 API，所以包了一层。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="XmlWriter 包装外部 XML 库：使用它的类在单元测试中 Mock XmlWriter，XmlWriter 自己用集成测试调用真实库">
+  <rect class="bx" x="20" y="20" width="110" height="36" rx="6"/><text class="mono" x="75" y="43" text-anchor="middle">ATest</text>
+  <rect class="bx" x="20" y="80" width="110" height="36" rx="6"/><text class="mono" x="75" y="103" text-anchor="middle">BTest</text>
+  <rect class="bx" x="20" y="140" width="110" height="36" rx="6"/><text class="mono" x="75" y="163" text-anchor="middle">CTest</text>
+  <text class="sm" x="75" y="196" text-anchor="middle">单元测试</text>
+  <rect class="bx-b" x="170" y="20" width="80" height="36" rx="6"/><text class="ttl on-b" x="210" y="43" text-anchor="middle">A</text>
+  <rect class="bx-b" x="170" y="80" width="80" height="36" rx="6"/><text class="ttl on-b" x="210" y="103" text-anchor="middle">B</text>
+  <rect class="bx-b" x="170" y="140" width="80" height="36" rx="6"/><text class="ttl on-b" x="210" y="163" text-anchor="middle">C</text>
+  <path class="ln" d="M132 38 H166" marker-end="url(#ar)"/>
+  <path class="ln" d="M132 98 H166" marker-end="url(#ar)"/>
+  <path class="ln" d="M132 158 H166" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="300" y="80" width="140" height="36" rx="6"/><text class="lbl on-a" x="370" y="103" text-anchor="middle">XmlWriter（Mock）</text>
+  <path class="ln-a" d="M252 38 L298 90" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M252 98 H296" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M252 158 L298 108" marker-end="url(#ar-a)"/>
+
+  <path class="ln-d" d="M480 10 V240"/>
+
+  <rect class="bx-g" x="520" y="20" width="200" height="36" rx="6"/><text class="mono on-g" x="620" y="43" text-anchor="middle">XmlWriterTest</text>
+  <text class="sm" x="690" y="76" text-anchor="middle">集成测试</text>
+  <rect class="bx-g" x="550" y="90" width="140" height="40" rx="6"/><text class="ttl on-g" x="620" y="115" text-anchor="middle">XmlWriter</text>
+  <rect class="bx" x="530" y="170" width="180" height="44" rx="22"/><text class="lbl" x="620" y="190" text-anchor="middle">（外部）XML 库</text><text class="sm" x="620" y="206" text-anchor="middle">真实调用，不 Mock</text>
+  <path class="ln" d="M620 58 V86" marker-end="url(#ar)"/>
+  <path class="ln" d="M620 132 V166" marker-end="url(#ar)"/>
+  <text class="sm" x="240" y="232" text-anchor="middle">A、B、C 只依赖你自己定义的 write(Invoice)，测试又快又简单</text>
+  <text class="sm" x="620" y="236" text-anchor="middle">库一变，这一个测试就会坏</text>
+</svg>
+<figcaption>图 6-11　只 Mock 你拥有的类型：用自己的抽象包住外部库，再用集成测试守住这层抽象</figcaption>
+</figure>
+
+<p>
+  假设你把某个 XML 解析库的全部行为封装在 <code>XmlWriter</code> 中，只对外提供 <code>write(Invoice)</code>。所有依赖 XmlWriter 的类在单元测试里都 Mock 它；
+  而 XmlWriter 自己的测试不 Mock 库，而是真的调用它，确认 XML 按预期写出。库一变，这一个测试就会坏，由开发者决定如何应对新行为。
+  这会增加系统的复杂度，需要多维护一层抽象 —— 但测试上获得的便利通常足以抵消这个成本。（「只 Mock 你拥有的类型」最早由 Freeman 等人在提出 Mock 对象概念的 2004 年论文中提出，Mockito 也这样建议。）
+</p>
+
+<h2 id="others">别人怎么说：Google 的观点</h2>
+
+<p>《Software Engineering at Google》（2020）用一整章讨论测试替身。作者的解读和他自己的看法：</p>
+
+<div class="tw">
+<table>
+  <tr><th>Google 的观点</th><th>作者的看法</th></tr>
+  <tr><td>使用替身要求系统<strong>为可测试性而设计</strong></td><td>同意：用 Mock，就得保证被测类能接收 Mock。</td></tr>
+  <tr><td>构建忠实于真实实现的替身很难</td><td>同意：Mock 与生产类契约不一致时，测试全绿，系统却在生产环境失败。</td></tr>
+  <tr><td><strong>真实优于隔离</strong>：能用真实实现就用</td><td>完全同意，但务实：用真实依赖太难测时，就 Mock。考虑执行时间和不确定性。</td></tr>
+  <tr><td>真实实现不可行时，<strong>Fake 优于 Mock</strong></td><td>不完全同意：要么用真的，要么 Mock。Fake 也有和 Mock 同样的问题 —— 你怎么保证它和真实实现行为一致？作者很少用 Fake。</td></tr>
+  <tr><td>过度 Mock 很危险：测试变得难懂、脆弱、低效</td><td>同意。如果被测类逼你 Mock 太多，可能说明生产类设计得不好。</td></tr>
+  <tr><td>优先做<strong>状态测试</strong>，而非交互测试</td><td>大体同意，但写得好的交互测试也有用。经验法则：类的重点在交互，就测交互；重点在处理结果，就测状态。</td></tr>
+  <tr><td>避免过度指定的交互测试</td><td>好建议：只 Mock 该 Mock 的，只验证对这个测试有意义的交互，不要验证每一个。</td></tr>
+  <tr><td>好的交互测试需要严格的设计准则</td><td>即使是资深开发者也很难用好 Mock。重视团队培训。</td></tr>
+</table>
+</div>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>测试替身帮助我们测试那些依赖于缓慢、复杂或难以控制和观察的外部组件的类。</li>
+  <li>替身有多种：Stub 在方法被调用时返回写死的值；Mock 像 Stub，但还能定义我们期望它如何与其他类交互。</li>
+  <li>Mock 有帮助，也有缺点：Mock 可能与真实实现不一致，导致测试通过而系统失败。</li>
+  <li>用 Mock 的测试比不用的与生产代码耦合更紧，缺乏规划时这种耦合会成为问题。</li>
+  <li>生产类应该允许注入 Mock，常见做法是通过构造函数接收所有依赖。</li>
+  <li>即使决定用 Mock，也不必（也不应该）Mock 一切，只 Mock 必要的。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>6.1　Mock、Stub、Fake 分别是什么，有什么区别？</summary>
+<p><strong>Fake</strong> 是被模拟类的真实可用实现，只是用简单得多的方式完成同样的任务。<strong>Stub</strong> 为测试中的调用提供写死的答案，没有可工作的实现。<strong>Mock</strong> 像 Stub，但还预先知道应该发生哪些交互，可以验证它们。</p></details>
+
+<details class="quiz"><summary>6.2　InvoiceFilter 通过构造函数接收 IssuedInvoices（访问数据库），filter() 返回金额 &lt; 100 的发票。以下哪项是<em>错误</em>的？（A 只有集成测试才能达到 100% 分支覆盖　B 它的实现允许依赖注入，因而可以 Mock　C 可以用 Mock 写出完全隔离的单元测试　D IssuedInvoices 应该用集成测试来测）</summary>
+<p><strong>A</strong>。用 Stub 替换 IssuedInvoices，单元测试就能覆盖所有分支。</p></details>
+
+<details class="quiz"><summary>6.3　一个系统根据天气相关的复杂布尔条件组合（气温、降雨量、风……）触发事件，设计良好、各类职责单一。你用规格测试并借助 Mock 来测。哪种策略有效？</summary>
+<p><strong>用 Mock 控制外部条件，并观察被触发的事件。</strong>也就是说：天气数据的来源用 Stub 喂数据，事件的触发者用 Mock 验证交互。</p></details>
+
+<details class="quiz"><summary>6.4　类 A 依赖类 B 的一个静态方法。要正确地测 A，应该：方法 1 Mock B 以控制其方法行为；方法 2 重构 A，让 B 方法的结果作为参数传入。（只用方法 1 / 都不用 / 只用方法 2 / 都用）</summary>
+<p><strong>只用方法 2</strong>。把静态调用的结果变成参数（或注入的依赖），A 就能直接用普通单元测试控制输入，不必依赖 Mock 静态方法这种「黑魔法」。</p></details>
+
+<details class="quiz"><summary>6.5　按本书的指导，什么类型的类该 Mock，什么不该？</summary>
+<p>与基础设施相关的、太复杂的、太慢的，适合用 Mock 替换。实体类、简单的工具函数和数据容器通常不 Mock。</p></details>
+
+<details class="quiz"><summary>6.6　了解了替身的利弊之后，你怎么看？打算用 Mock 和 Stub，还是更专注于集成测试？</summary>
+<p>没有标准答案。试着结合你的项目回答：哪些依赖慢、不确定、难控制？哪些依赖的契约稳定？团队是否有能力维护好 Mock？</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch6</code> 目录跑 <code>mvn test</code>，对比 <code>InvoiceFilterWithDatabaseTest</code>（真数据库，HSQLDB 内存库）和 <code>InvoiceFilterTest</code>（Stub）的代码量和运行时间。</li>
+    <li>在 <code>ch6/mock/SAPInvoiceSender</code> 里注释掉 <code>sap.send(invoice)</code>，看 Mockito 的失败信息。换成 Python 或 TypeScript 版本，对比 unittest.mock 和 Vitest 的报错。</li>
+    <li>书中留的练习：为 <code>InvoiceToSapInvoiceConverter</code> 写不需要任何 Mock 的单元测试。你会发现它还是依赖 <code>LocalDate.now()</code> —— 用本章的 Clock 手法把它改得可测。</li>
+    <li>给 <code>sendToSapWithTheGeneratedId</code> 补上边界用例：恰好两个字符的名字。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

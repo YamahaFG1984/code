@@ -1,0 +1,1869 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 9 章 · 编写更大的测试 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="9">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 9 章</span>
+<h1>编写更大的测试</h1>
+<p class="lede">
+  前面几章的代码几乎都能用单元测试搞定，碰到依赖就用 Stub 和 Mock 替掉。但不是所有东西都能（或应该）用单元测试：
+  硬要写，得到的测试集要么太弱找不到 Bug，要么难写，要么一改代码就碎。这一章讲三种常见的「大测试」：
+  一起运行多个类的<strong>组件测试</strong>、与数据库打交道的 <strong>SQL 集成测试</strong>，以及端到端的<strong>系统测试</strong>（Web 测试）。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>判断什么时候该写更大的测试</li>
+    <li>为多个类组成的组件写测试，并把规格测试用在更粗的粒度上</li>
+    <li>为 SQL 查询设计测试用例，搭建可靠的数据库测试基础设施</li>
+    <li>用 Selenium / Playwright 和<strong>页面对象</strong>模式写可维护的 Web 系统测试</li>
+    <li>掌握让大测试稳定、便宜的一系列最佳实践</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="when">什么时候用更大的测试</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="本章的三种更大的测试在测试金字塔中的位置">
+  <polygon points="330,20 430,20 470,70 290,70" style="fill:var(--purple-bg);stroke:var(--purple);stroke-width:1.5"/>
+  <text class="lbl on-p" x="380" y="50" text-anchor="middle">系统测试</text>
+  <polygon points="290,76 470,76 510,126 250,126" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/>
+  <text class="lbl on-g" x="380" y="106" text-anchor="middle">集成测试</text>
+  <polygon points="250,132 510,132 560,196 200,196" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <text class="lbl on-b" x="380" y="160" text-anchor="middle">单元测试</text>
+  <text class="sm" x="380" y="178" text-anchor="middle">（以及「更大的单元测试」：组件测试）</text>
+
+  <path class="ln-d" d="M474 46 H560"/><text class="lbl" x="566" y="42">§9.3 Web 系统测试</text><text class="sm" x="566" y="58">Selenium / Playwright + 页面对象</text>
+  <path class="ln-d" d="M514 100 H560"/><text class="lbl" x="566" y="96">§9.2 SQL 集成测试</text><text class="sm" x="566" y="112">真实数据库、干净的状态</text>
+  <path class="ln-d" d="M200 166 H40"/><text class="lbl" x="40" y="146">§9.1 组件测试</text><text class="sm" x="40" y="186">多个类一起跑，不越过系统边界</text>
+</svg>
+<figcaption>图 9-1　本章的三类「大测试」</figcaption>
+</figure>
+
+<p>作者认为两种情况应该用更大的测试：</p>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#129513;</span><h4>整体行为由多个类组成</h4><p>每个类都单独测过了，但你想看它们<strong>一起工作</strong>。比如购物车总价：规则 1 的类、规则 2 的类都测过了，你仍想看所有规则作用后的最终价格。</p></div>
+  <div class="card"><span class="ic">&#128268;</span><h4>被测类是更大框架里的插件</h4><p>面向对象让我们封装重复的复杂性，用户只需实现关键部分。比如 IDE 插件：逻辑是你写的，但很多动作只有 IntelliJ 调用插件并传参时才发生。</p></div>
+</div>
+
+<h2 id="components">组件测试：多个类一起跑</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：购物车最终价格</div>
+  <ul>
+    <li>每件商品的价格 = 单价 × 数量。</li>
+    <li>运费：1–3 件（含）加收 5 美元；4–10 件（含）加收 12.5 美元；超过 10 件加收 20 美元。</li>
+    <li>购物车里有电子产品，额外加收 7.5 美元。</li>
+  </ul>
+  <p style="font-size:14px;color:var(--fg-soft)">（运费规则不太现实。实际工作中发现这种不一致时，应该和需求方沟通。这里为了例子保持简单。）</p>
+</div>
+
+<p>动手前先想想怎么拆：最终价格是把一系列规则应用到购物车上。按照为可测试性设计的经验，<strong>每条规则一个类</strong> —— 全塞进一个类会变得很大、需要大量测试；我们更喜欢只需少量测试的小类。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="FinalPriceCalculator 聚合三条 PriceRule：商品价格、电子产品附加费、运费">
+  <rect class="bx" x="20" y="100" width="150" height="56" rx="10"/>
+  <text class="ttl" x="95" y="124" text-anchor="middle">ShoppingCart</text>
+  <text class="sm" x="95" y="142" text-anchor="middle">Item 列表</text>
+  <path class="ln" d="M172 128 H236" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="240" y="90" width="200" height="76" rx="12"/>
+  <text class="ttl on-a" x="340" y="120" text-anchor="middle">FinalPriceCalculator</text>
+  <text class="sm" x="340" y="140" text-anchor="middle">把所有规则的结果加起来</text>
+  <rect class="bx-b" x="520" y="20" width="220" height="56" rx="10"/>
+  <text class="ttl on-b" x="630" y="44" text-anchor="middle">PriceOfItems</text>
+  <text class="sm" x="630" y="62" text-anchor="middle">Σ 单价 × 数量</text>
+  <rect class="bx-b" x="520" y="100" width="220" height="56" rx="10"/>
+  <text class="ttl on-b" x="630" y="124" text-anchor="middle">ExtraChargeForElectronics</text>
+  <text class="sm" x="630" y="142" text-anchor="middle">有电子产品 → +7.5</text>
+  <rect class="bx-b" x="520" y="180" width="220" height="56" rx="10"/>
+  <text class="ttl on-b" x="630" y="204" text-anchor="middle">DeliveryPrice</text>
+  <text class="sm" x="630" y="222" text-anchor="middle">0 / 5 / 12.5 / 20</text>
+  <path class="ln" d="M442 110 L516 52" marker-end="url(#ar)"/>
+  <path class="ln" d="M442 128 H516" marker-end="url(#ar)"/>
+  <path class="ln" d="M442 146 L516 204" marker-end="url(#ar)"/>
+  <text class="sm on-b" x="480" y="236" text-anchor="middle">都实现 PriceRule 接口</text>
+</svg>
+<figcaption>图 9-2　每条定价规则一个小类，由计算器负责聚合</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/large/PriceRule.java + ShoppingCart + Item"><pre>
+public interface PriceRule {
+  double priceToAggregate(ShoppingCart cart);   // 返回这条规则要加到总价上的金额
+}
+
+public enum ItemType { ELECTRONIC, OTHER }
+
+public class Item {
+  private final ItemType type;
+  private final String name;
+  private final int quantity;
+  private final double pricePerUnit;   // 为了演示用 double；真实系统请用 BigDecimal 或整数
+  // 构造函数、getter……
+}
+
+public class ShoppingCart {
+  private final List&lt;Item&gt; items = new ArrayList&lt;&gt;();
+  public void add(Item item) { items.add(item); }
+  public List&lt;Item&gt; getItems() { return Collections.unmodifiableList(items); }
+  public int numberOfItems() { return items.size(); }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pricing.py（基础类型）"><pre>
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Protocol
+
+class ItemType(Enum):
+    ELECTRONIC = "electronic"
+    OTHER = "other"
+
+@dataclass(frozen=True)
+class Item:
+    type: ItemType
+    name: str
+    quantity: int
+    price_per_unit: float    # 为了演示用 float；真实系统请用 Decimal 或整数
+
+@dataclass
+class ShoppingCart:
+    items: list[Item] = field(default_factory=list)
+
+    def add(self, item: Item) -&gt; None:
+        self.items.append(item)
+
+    def number_of_items(self) -&gt; int:
+        return len(self.items)
+
+class PriceRule(Protocol):
+    def price_to_aggregate(self, cart: ShoppingCart) -&gt; float: ...
+</pre></div>
+<div class="code" data-lang="ts" data-file="pricing.ts（基础类型）"><pre>
+export type ItemType = "ELECTRONIC" | "OTHER";
+
+export interface Item {
+  type: ItemType;
+  name: string;
+  quantity: number;
+  pricePerUnit: number;    // 为了演示用浮点数；真实系统请用整数（分）
+}
+
+export class ShoppingCart {
+  private readonly items: Item[] = [];
+  add(item: Item): void { this.items.push(item); }
+  getItems(): readonly Item[] { return this.items; }
+  numberOfItems(): number { return this.items.length; }
+}
+
+export interface PriceRule {
+  priceToAggregate(cart: ShoppingCart): number;
+}
+</pre></div>
+</div>
+
+<h3>先把每条规则单元测试好</h3>
+
+<p>运费只和商品件数有关。这个类又小又局部，用单元测试正合适。需求的边界清晰且连续（1–3、4–10、&gt;10），所以测每个区间的 on 点和 off 点：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 140" role="img" aria-label="运费规则的边界：0、1、3、4、10、11 件">
+  <path class="ln" d="M30 70 H730"/>
+  <rect class="bx-d" x="30" y="50" width="70" height="40" rx="6"/><text class="lbl" x="65" y="75" text-anchor="middle">0 → 0</text>
+  <rect class="bx-g" x="110" y="50" width="190" height="40" rx="6"/><text class="lbl on-g" x="205" y="75" text-anchor="middle">1–3 件 → 5</text>
+  <rect class="bx-b" x="310" y="50" width="240" height="40" rx="6"/><text class="lbl on-b" x="430" y="75" text-anchor="middle">4–10 件 → 12.5</text>
+  <rect class="bx-p" x="560" y="50" width="170" height="40" rx="6"/><text class="lbl on-p" x="645" y="75" text-anchor="middle">&gt; 10 件 → 20</text>
+  <text class="mono on-a" x="65" y="112" text-anchor="middle">0</text>
+  <text class="mono on-a" x="120" y="112" text-anchor="middle">1</text>
+  <text class="mono on-a" x="290" y="112" text-anchor="middle">3</text>
+  <text class="mono on-a" x="320" y="112" text-anchor="middle">4</text>
+  <text class="mono on-a" x="540" y="112" text-anchor="middle">10</text>
+  <text class="mono on-a" x="572" y="112" text-anchor="middle">11</text>
+  <text class="sm" x="380" y="134" text-anchor="middle">6 个测试点。「0 件」需求没提，是作者思考前置条件后决定的：空购物车运费为 0 —— 这个边角情况也值得一测</text>
+</svg>
+<figcaption>图 9-3　运费规则的 on / off 点</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/large/DeliveryPrice.java + DeliveryPriceTest.java"><pre>
+public class DeliveryPrice implements PriceRule {
+  @Override
+  public double priceToAggregate(ShoppingCart cart) {
+    int totalItems = cart.numberOfItems();
+    if (totalItems == 0)
+      return 0;
+    if (totalItems &gt;= 1 &amp;&amp; totalItems &lt;= 3)
+      return 5;
+    if (totalItems &gt;= 4 &amp;&amp; totalItems &lt;= 10)
+      return 12.5;
+    return 20.0;
+  }
+}
+
+public class DeliveryPriceTest {
+  @ParameterizedTest
+  @CsvSource({"0,0", "1,5", "3,5", "4,12.5", "10,12.5", "11,20"})   // 六个边界点
+  void deliveryIsAccordingToTheNumberOfItems(int noOfItems, double expectedDeliveryPrice) {
+    ShoppingCart cart = new ShoppingCart();
+    for (int i = 0; i &lt; noOfItems; i++) {
+      cart.add(new Item(ItemType.OTHER, "ANY", 1, 1));   // 类型、名字、数量、单价都无所谓
+    }
+    double price = new DeliveryPrice().priceToAggregate(cart);
+    assertThat(price).isEqualTo(expectedDeliveryPrice);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="delivery_price.py + test_delivery_price.py"><pre>
+class DeliveryPrice:
+    def price_to_aggregate(self, cart: ShoppingCart) -&gt; float:
+        total_items = cart.number_of_items()
+        if total_items == 0:
+            return 0
+        if 1 &lt;= total_items &lt;= 3:
+            return 5
+        if 4 &lt;= total_items &lt;= 10:
+            return 12.5
+        return 20.0
+
+# ---- test_delivery_price.py ----
+import pytest
+
+@pytest.mark.parametrize("no_of_items, expected", [
+    (0, 0), (1, 5), (3, 5), (4, 12.5), (10, 12.5), (11, 20),   # 六个边界点
+])
+def test_delivery_is_according_to_the_number_of_items(no_of_items, expected):
+    cart = ShoppingCart()
+    for _ in range(no_of_items):
+        cart.add(Item(ItemType.OTHER, "ANY", 1, 1))            # 这些字段都无所谓
+    assert DeliveryPrice().price_to_aggregate(cart) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="deliveryPrice.ts + deliveryPrice.test.ts"><pre>
+export class DeliveryPrice implements PriceRule {
+  priceToAggregate(cart: ShoppingCart): number {
+    const totalItems = cart.numberOfItems();
+    if (totalItems === 0) return 0;
+    if (totalItems &gt;= 1 &amp;&amp; totalItems &lt;= 3) return 5;
+    if (totalItems &gt;= 4 &amp;&amp; totalItems &lt;= 10) return 12.5;
+    return 20.0;
+  }
+}
+
+// ---- deliveryPrice.test.ts ----
+test.each([
+  [0, 0], [1, 5], [3, 5], [4, 12.5], [10, 12.5], [11, 20],   // 六个边界点
+])("%i items → delivery %d", (noOfItems, expected) =&gt; {
+  const cart = new ShoppingCart();
+  for (let i = 0; i &lt; noOfItems; i++) {
+    cart.add({ type: "OTHER", name: "ANY", quantity: 1, pricePerUnit: 1 });   // 这些字段都无所谓
+  }
+  expect(new DeliveryPrice().priceToAggregate(cart)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 为了 100% 覆盖率而重构？</div>
+  <p>
+    这又是一个不能盲目看覆盖率的例子：生成报告，你会发现分支覆盖不到 100%！<code>totalItems &gt;= 1</code> 和 <code>totalItems &gt;= 4</code> 的「假」分支从未走过。
+    要让 <code>totalItems &gt;= 1</code> 为假，需要件数小于 1 —— 我们有 0 件的测试，但它在 <code>totalItems == 0</code> 那里就提前返回了，根本走不到这个条件。
+    务实地说，所有分支都覆盖了，只是工具看不出来。可以把代码改写成等价的、让工具满意的形式：
+  </p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="等价写法：工具能报告 100% 分支覆盖"><pre>
+public double priceToAggregate(ShoppingCart cart) {
+  int totalItems = cart.numberOfItems();
+  if (totalItems == 0)
+    return 0;
+  if (totalItems &lt;= 3)       // 走到这里一定 &gt;= 1，不必再判断
+    return 5;
+  if (totalItems &lt;= 10)      // 走到这里一定 &gt;= 4
+    return 12.5;
+  return 20.0;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="等价写法：工具能报告 100% 分支覆盖"><pre>
+def price_to_aggregate(self, cart) -&gt; float:
+    total_items = cart.number_of_items()
+    if total_items == 0:
+        return 0
+    if total_items &lt;= 3:       # 走到这里一定 &gt;= 1
+        return 5
+    if total_items &lt;= 10:      # 走到这里一定 &gt;= 4
+        return 12.5
+    return 20.0
+</pre></div>
+<div class="code" data-lang="ts" data-file="等价写法：工具能报告 100% 分支覆盖"><pre>
+priceToAggregate(cart: ShoppingCart): number {
+  const totalItems = cart.numberOfItems();
+  if (totalItems === 0) return 0;
+  if (totalItems &lt;= 3) return 5;       // 走到这里一定 &gt;= 1
+  if (totalItems &lt;= 10) return 12.5;   // 走到这里一定 &gt;= 4
+  return 20.0;
+}
+</pre></div>
+</div>
+
+<p>电子产品附加费：检查购物车里有没有电子产品。三种情况 —— 有一件或多件、没有、空购物车：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/large/ExtraChargeForElectronics.java + Test"><pre>
+public class ExtraChargeForElectronics implements PriceRule {
+  @Override
+  public double priceToAggregate(ShoppingCart cart) {
+    List&lt;Item&gt; items = cart.getItems();
+    boolean hasAnElectronicDevice = items.stream()
+        .anyMatch(it -&gt; it.getType() == ItemType.ELECTRONIC);
+    if (hasAnElectronicDevice)
+      return 7.50;
+    return 0;
+  }
+}
+
+public class ExtraChargeForElectronicsTest {
+  @ParameterizedTest
+  @CsvSource({"1", "2"})      // 一件和两件：确保多件电子产品不会被重复收费
+  void chargeTheExtraPriceIfThereIsAnyElectronicInTheCart(int numberOfElectronics) {
+    ShoppingCart cart = new ShoppingCart();
+    for (int i = 0; i &lt; numberOfElectronics; i++) {
+      cart.add(new Item(ItemType.ELECTRONIC, "ANY ELECTRONIC", 1, 1));
+    }
+    double price = new ExtraChargeForElectronics().priceToAggregate(cart);
+    assertThat(price).isEqualTo(7.50);
+  }
+
+  @Test
+  void noExtraChargesIfNoElectronics() {
+    ShoppingCart cart = new ShoppingCart();
+    cart.add(new Item(ItemType.OTHER, "BOOK", 1, 1));
+    cart.add(new Item(ItemType.OTHER, "CD", 1, 1));
+    cart.add(new Item(ItemType.OTHER, "BABY TOY", 1, 1));
+    double price = new ExtraChargeForElectronics().priceToAggregate(cart);
+    assertThat(price).isEqualTo(0);
+  }
+
+  @Test
+  void noItems() {
+    ShoppingCart cart = new ShoppingCart();
+    double price = new ExtraChargeForElectronics().priceToAggregate(cart);
+    assertThat(price).isEqualTo(0);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="extra_charge_for_electronics.py + test"><pre>
+class ExtraChargeForElectronics:
+    def price_to_aggregate(self, cart: ShoppingCart) -&gt; float:
+        has_electronic = any(i.type == ItemType.ELECTRONIC for i in cart.items)
+        return 7.50 if has_electronic else 0
+
+# ---- test_extra_charge_for_electronics.py ----
+@pytest.mark.parametrize("number_of_electronics", [1, 2])   # 多件也不重复收费
+def test_charge_the_extra_price_if_there_is_any_electronic(number_of_electronics):
+    cart = ShoppingCart()
+    for _ in range(number_of_electronics):
+        cart.add(Item(ItemType.ELECTRONIC, "ANY ELECTRONIC", 1, 1))
+    assert ExtraChargeForElectronics().price_to_aggregate(cart) == 7.50
+
+def test_no_extra_charges_if_no_electronics():
+    cart = ShoppingCart()
+    for name in ["BOOK", "CD", "BABY TOY"]:
+        cart.add(Item(ItemType.OTHER, name, 1, 1))
+    assert ExtraChargeForElectronics().price_to_aggregate(cart) == 0
+
+def test_no_items():
+    assert ExtraChargeForElectronics().price_to_aggregate(ShoppingCart()) == 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="extraChargeForElectronics.ts + test"><pre>
+export class ExtraChargeForElectronics implements PriceRule {
+  priceToAggregate(cart: ShoppingCart): number {
+    const hasElectronic = cart.getItems().some((it) =&gt; it.type === "ELECTRONIC");
+    return hasElectronic ? 7.5 : 0;
+  }
+}
+
+// ---- extraChargeForElectronics.test.ts ----
+test.each([1, 2])("charges extra with %i electronic item(s)", (n) =&gt; {   // 多件也不重复收费
+  const cart = new ShoppingCart();
+  for (let i = 0; i &lt; n; i++) {
+    cart.add({ type: "ELECTRONIC", name: "ANY ELECTRONIC", quantity: 1, pricePerUnit: 1 });
+  }
+  expect(new ExtraChargeForElectronics().priceToAggregate(cart)).toBe(7.5);
+});
+
+test("no extra charges if no electronics", () =&gt; {
+  const cart = new ShoppingCart();
+  for (const name of ["BOOK", "CD", "BABY TOY"]) {
+    cart.add({ type: "OTHER", name, quantity: 1, pricePerUnit: 1 });
+  }
+  expect(new ExtraChargeForElectronics().priceToAggregate(cart)).toBe(0);
+});
+
+test("no items", () =&gt; {
+  expect(new ExtraChargeForElectronics().priceToAggregate(new ShoppingCart())).toBe(0);
+});
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 这里要用属性测试吗？</div>
+  <p>实现很直接，电子产品的件数对算法影响不大，作者觉得例子测试就够了。（思考：在「一件和两件电子产品」的测试里再加一件非电子商品，测试会更强吗？）</p>
+</div>
+
+<p>第三条规则 PriceOfItems 遍历商品，累加「单价 × 数量」，代码和测试见仓库。最后是聚合所有规则的计算器 —— 用桩替掉规则，它很容易单元测试：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/large/FinalPriceCalculator.java + Test"><pre>
+public class FinalPriceCalculator {
+  private final List&lt;PriceRule&gt; rules;
+
+  public FinalPriceCalculator(List&lt;PriceRule&gt; rules) {   // 可以接收任意组合的规则
+    this.rules = rules;
+  }
+
+  public double calculate(ShoppingCart cart) {
+    double finalPrice = 0;
+    for (PriceRule rule : rules) {
+      finalPrice += rule.priceToAggregate(cart);
+    }
+    return finalPrice;
+  }
+}
+
+public class FinalPriceCalculatorTest {
+  @Test
+  void callAllPriceRules() {
+    PriceRule rule1 = mock(PriceRule.class);
+    PriceRule rule2 = mock(PriceRule.class);
+    PriceRule rule3 = mock(PriceRule.class);
+
+    ShoppingCart cart = new ShoppingCart();              // 商品是什么无所谓，规则都是桩
+    cart.add(new Item(ItemType.OTHER, "ITEM", 1, 1));
+
+    when(rule1.priceToAggregate(cart)).thenReturn(1.0);
+    when(rule2.priceToAggregate(cart)).thenReturn(0.0);  // 0 也可能出现
+    when(rule3.priceToAggregate(cart)).thenReturn(2.0);
+
+    FinalPriceCalculator calculator = new FinalPriceCalculator(Arrays.asList(rule1, rule2, rule3));
+    double price = calculator.calculate(cart);
+
+    assertThat(price).isEqualTo(3);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="final_price_calculator.py + test"><pre>
+class FinalPriceCalculator:
+    def __init__(self, rules: list[PriceRule]):     # 可以接收任意组合的规则
+        self._rules = rules
+
+    def calculate(self, cart: ShoppingCart) -&gt; float:
+        return sum(rule.price_to_aggregate(cart) for rule in self._rules)
+
+# ---- test_final_price_calculator.py ----
+from unittest.mock import Mock
+
+def test_call_all_price_rules():
+    cart = ShoppingCart()                             # 商品是什么无所谓，规则都是桩
+    cart.add(Item(ItemType.OTHER, "ITEM", 1, 1))
+    rules = [Mock(), Mock(), Mock()]
+    for rule, value in zip(rules, [1.0, 0.0, 2.0]):   # 0 也可能出现
+        rule.price_to_aggregate.return_value = value
+
+    assert FinalPriceCalculator(rules).calculate(cart) == 3
+    for rule in rules:
+        rule.price_to_aggregate.assert_called_once_with(cart)
+</pre></div>
+<div class="code" data-lang="ts" data-file="finalPriceCalculator.ts + test"><pre>
+export class FinalPriceCalculator {
+  constructor(private readonly rules: PriceRule[]) {}   // 可以接收任意组合的规则
+
+  calculate(cart: ShoppingCart): number {
+    return this.rules.reduce((total, rule) =&gt; total + rule.priceToAggregate(cart), 0);
+  }
+}
+
+// ---- finalPriceCalculator.test.ts ----
+test("call all price rules", () =&gt; {
+  const cart = new ShoppingCart();                      // 商品是什么无所谓，规则都是桩
+  cart.add({ type: "OTHER", name: "ITEM", quantity: 1, pricePerUnit: 1 });
+  const rules = [1.0, 0.0, 2.0].map((v) =&gt; ({ priceToAggregate: vi.fn(() =&gt; v) }));   // 0 也可能出现
+
+  expect(new FinalPriceCalculator(rules).calculate(cart)).toBe(3);
+  for (const rule of rules) expect(rule.priceToAggregate).toHaveBeenCalledWith(cart);
+});
+</pre></div>
+</div>
+
+<h3>再把它们拼起来测一次</h3>
+
+<p>
+  每条规则都单独测过，计算器也用桩测过了。怀疑的声音：「可我们还是不知道把它们插在一起能不能工作。」这是合理的怀疑。
+  我们的测试已经在结构上覆盖了所有需求，所以这时适合写<strong>一个更大的测试</strong>，把计算器和所有真实规则一起跑。先在生产代码里建一个工厂：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/large/FinalPriceCalculatorFactory.java + LargerTest"><pre>
+public class FinalPriceCalculatorFactory {
+  public FinalPriceCalculator build() {
+    List&lt;PriceRule&gt; priceRules = Arrays.asList(     // 手动组装；也可以交给依赖注入框架
+        new PriceOfItems(),
+        new ExtraChargeForElectronics(),
+        new DeliveryPrice());
+    return new FinalPriceCalculator(priceRules);
+  }
+}
+
+public class FinalPriceCalculatorLargerTest {
+  // 真实的计算器 + 所有真实的规则
+  private final FinalPriceCalculator calculator = new FinalPriceCalculatorFactory().build();
+
+  @Test
+  void appliesAllRules() {
+    ShoppingCart cart = new ShoppingCart();
+    cart.add(new Item(ItemType.ELECTRONIC, "PS5", 1, 299));
+    cart.add(new Item(ItemType.OTHER, "BOOK", 1, 29));
+    cart.add(new Item(ItemType.OTHER, "CD", 2, 12));
+    cart.add(new Item(ItemType.OTHER, "CHOCOLATE", 3, 1.50));
+
+    double price = calculator.calculate(cart);
+
+    double expectedPrice =
+        299 + 29 + 12 * 2 + 1.50 * 3 +   // 商品价格
+        7.50 +                            // 有电子产品
+        12.5;                             // 4 件商品的运费
+    assertThat(price).isEqualTo(expectedPrice);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="factory + test_final_price_calculator_larger.py"><pre>
+def build_final_price_calculator() -&gt; FinalPriceCalculator:
+    return FinalPriceCalculator([          # 手动组装；也可以交给依赖注入框架
+        PriceOfItems(),
+        ExtraChargeForElectronics(),
+        DeliveryPrice(),
+    ])
+
+# ---- test_final_price_calculator_larger.py ----
+def test_applies_all_rules():
+    calculator = build_final_price_calculator()   # 真实的计算器 + 所有真实的规则
+    cart = ShoppingCart()
+    cart.add(Item(ItemType.ELECTRONIC, "PS5", 1, 299))
+    cart.add(Item(ItemType.OTHER, "BOOK", 1, 29))
+    cart.add(Item(ItemType.OTHER, "CD", 2, 12))
+    cart.add(Item(ItemType.OTHER, "CHOCOLATE", 3, 1.50))
+
+    expected = (299 + 29 + 12 * 2 + 1.50 * 3   # 商品价格
+                + 7.50                         # 有电子产品
+                + 12.5)                        # 4 件商品的运费
+    assert calculator.calculate(cart) == pytest.approx(expected)
+</pre></div>
+<div class="code" data-lang="ts" data-file="factory + finalPriceCalculator.larger.test.ts"><pre>
+export function buildFinalPriceCalculator(): FinalPriceCalculator {
+  return new FinalPriceCalculator([        // 手动组装；也可以交给依赖注入框架
+    new PriceOfItems(),
+    new ExtraChargeForElectronics(),
+    new DeliveryPrice(),
+  ]);
+}
+
+// ---- finalPriceCalculator.larger.test.ts ----
+test("applies all rules", () =&gt; {
+  const calculator = buildFinalPriceCalculator();   // 真实的计算器 + 所有真实的规则
+  const cart = new ShoppingCart();
+  cart.add({ type: "ELECTRONIC", name: "PS5", quantity: 1, pricePerUnit: 299 });
+  cart.add({ type: "OTHER", name: "BOOK", quantity: 1, pricePerUnit: 29 });
+  cart.add({ type: "OTHER", name: "CD", quantity: 2, pricePerUnit: 12 });
+  cart.add({ type: "OTHER", name: "CHOCOLATE", quantity: 3, pricePerUnit: 1.5 });
+
+  const expected = 299 + 29 + 12 * 2 + 1.5 * 3   // 商品价格
+    + 7.5                                        // 有电子产品
+    + 12.5;                                      // 4 件商品的运费
+  expect(calculator.calculate(cart)).toBeCloseTo(expected);
+});
+</pre></div>
+</div>
+
+<p>
+  从测试代码看，这和写单元测试没区别。按第 1 章的定义，作者<strong>不</strong>把它算作集成测试，因为它没有越过系统边界 —— 这是一个运行了很多单元的<strong>更大的测试</strong>。
+  规格测试、边界测试和结构化测试同样适用，只是粒度更粗：测 DeliveryPrice 时只需考虑运费规则，现在要一起测所有行为，组合数就多多了。
+</p>
+
+<div class="cards">
+  <div class="card"><h4>购物车</h4><p>空 · 1 件 · 多件</p></div>
+  <div class="card"><h4>每件商品</h4><p>数量为 1 · 数量大于 1 · 单价 × 数量为整数 · 不为整数</p></div>
+  <div class="card"><h4>运费</h4><p>1–3 件 · 4–10 件 · 10 件以上</p></div>
+  <div class="card"><h4>电子产品</h4><p>有 · 没有</p></div>
+</div>
+
+<p>把有意义的分区组合起来、设计用例、写成自动化测试 —— 留作练习。作者在看到价值时才用这种方式（比如调试一个生产环境出现的问题），而且是<strong>在单元测试之外</strong>补充，不会把一切重测一遍。他更愿意把这类大组件测试当作「用真实世界的输入试一试组件」的机会。</p>
+
+<h3>越过代码库边界的组件</h3>
+
+<p>上面的例子里，每个单元仍可以单独测。但有时单独测一个单元<strong>根本没有意义</strong>。作者举了两个自己写的开源项目：</p>
+
+<div class="vs">
+  <div class="new"><div class="h">CK：Java 代码度量工具</div>
+    <div style="padding:10px 14px">
+      <p style="margin-top:0">CK 依赖 Eclipse JDT 把 Java 代码解析成抽象语法树（AST），再用一个个 <strong>Visitor</strong> 访问语法树、计算度量。比如 CBO（对象间耦合度）统计一个类依赖了多少个其他类。</p>
+      <p style="margin-bottom:0">CBO 类的 <code>visit(MethodInvocation)</code>、<code>visit(FieldDeclaration)</code> 由 JDT 调用。Mock 掉所有 AST 节点再手动调用？离真实运行太远了。作者的做法：准备一些专门用于测试的<strong>小而真实的 Java 文件</strong>，真的启动 JDT 解析，再断言度量结果。</p>
+    </div></div>
+  <div class="new"><div class="h">Andy：给学生测试打分的工具</div>
+    <div style="padding:10px 14px">
+      <p style="margin-top:0">Andy 编译学生提交的测试代码 → 运行 JUnit → 计算覆盖率 → 静态分析 → 用预先设计的变异体（元测试）检验测试集是否够强 → 给出分数。每一步一个类。</p>
+      <p style="margin-bottom:0">可是不先编译，怎么运行「跑 JUnit」这一步？不可能。所以测试直接运行整个 Andy 引擎，喂给它真实的 Java 文件，只针对关心的那一步做断言。</p>
+    </div></div>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="Andy 的流程：编译、运行测试、计算覆盖率、运行元测试、生成评分">
+  <rect class="bx" x="14" y="50" width="100" height="56" rx="10"/>
+  <text class="lbl" x="64" y="74" text-anchor="middle">学生提交</text>
+  <text class="sm" x="64" y="92" text-anchor="middle">测试代码</text>
+  <path class="ln" d="M116 78 H138" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="142" y="50" width="100" height="56" rx="10"/><text class="lbl on-b" x="192" y="82" text-anchor="middle">编译</text>
+  <path class="ln" d="M244 78 H266" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="270" y="50" width="100" height="56" rx="10"/><text class="lbl on-b" x="320" y="82" text-anchor="middle">运行测试</text>
+  <path class="ln" d="M372 78 H394" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="398" y="50" width="100" height="56" rx="10"/><text class="lbl on-b" x="448" y="82" text-anchor="middle">覆盖率</text>
+  <path class="ln" d="M500 78 H522" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="526" y="50" width="100" height="56" rx="10"/><text class="lbl on-b" x="576" y="82" text-anchor="middle">元测试</text>
+  <path class="ln" d="M628 78 H650" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="654" y="36" width="96" height="84" rx="10"/>
+  <text class="lbl on-g" x="702" y="60" text-anchor="middle">评分</text>
+  <text class="sm" x="702" y="80" text-anchor="middle">78/100</text>
+  <text class="sm" x="702" y="96" text-anchor="middle">元测试 2/3</text>
+  <path class="ln-a" d="M192 128 H576"/>
+  <text class="sm on-a" x="384" y="148" text-anchor="middle">每一步都依赖前一步的结果：无法把「运行测试」这一步隔离出来单测，只能跑整个引擎</text>
+</svg>
+<figcaption>图 9-4　Andy 的（简化）流程</figcaption>
+</figure>
+
+<div class="code" data-lang="java" data-file="Andy：元测试步骤的集成测试（Java）"><pre>
+public class MetaTestsTest extends IntegrationTestBase {
+  @Test
+  void allMetaTestsPassing() {
+    Result result = run(                           // 运行整个 Andy 引擎
+        "NumberUtilsAddLibrary.java",               // 被测类的代码
+        "NumberUtilsAddOfficialSolution.java",      // 学生的提交（这里用官方答案）
+        "NumberUtilsAddConfiguration.java");        // 老师提供的配置
+
+    assertThat(result.getMetaTests().getTotalTests()).isEqualTo(4);
+    assertThat(result.getMetaTests().getPassedMetaTests()).isEqualTo(4);
+    assertThat(result.getMetaTests())
+        .has(passedMetaTest("AppliesMultipleCarriesWrongly"))   // 自定义的 AssertJ 断言，见第 10 章
+        .has(passedMetaTest("DoesNotApplyCarryAtAll"))
+        .has(passedMetaTest("DoesNotApplyLastCarry"))
+        .has(passedMetaTest("DoesNotCheckNumbersOutOfRange"));
+  }
+}
+</pre></div>
+
+<div class="box key">
+  <div class="t">&#128273; 作者的建议</div>
+  <p>尽可能用单元测试 —— 它们便宜、好写。但当你相信更大的测试能给你更多信心时，<strong>不要害怕写它</strong>。为插件式架构写组件、测试编译器这类问题，本身就是需要专门学习的测试领域。</p>
+</div>
+
+<h2 id="sql">数据库与 SQL 测试</h2>
+
+<p>本书很多例子里都有一个 DAO 负责读写数据库，我们总是飞快地把它 Mock 掉。但总得有人测这些类：DAO 常常执行复杂的 SQL，封装了大量业务知识。</p>
+
+<h3>SQL 查询该测什么</h3>
+
+<p>把查询看成<strong>谓词的组合</strong>：</p>
+<div class="code" data-lang="sql"><pre>
+SELECT * FROM INVOICE WHERE VALUE &lt; 50
+SELECT * FROM INVOICE I JOIN CUSTOMER C ON I.CUSTOMER_ID = C.ID WHERE C.COUNTRY = 'NL'
+SELECT * FROM INVOICE WHERE VALUE &gt; 50 AND VALUE &lt; 200
+</pre></div>
+
+<p>
+  <code>value &lt; 50</code>、<code>i.customer_id = c.id</code>、<code>c.country = 'NL'</code>、<code>value &gt; 50 AND value &lt; 200</code> 都是谓词。一个测试准则是：让各个谓词取不同的值，检查查询返回的结果是否符合预期。
+  本书的几乎所有技术都能用上：<strong>规格测试</strong>（SQL 源自需求，可以划分等价类）、<strong>边界分析</strong>（SQL 也有边界）、<strong>结构化测试</strong>（SQL 有谓词，可以从结构推导用例）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="WHERE value 大于 50 且小于 200 的分支覆盖与条件加分支覆盖">
+  <text class="mono" x="20" y="24">WHERE value &gt; 50 AND value &lt; 200</text>
+  <path class="ln" d="M30 80 H730"/>
+  <rect x="30" y="64" width="140" height="32" style="fill:var(--red-bg);stroke:var(--red)"/>
+  <rect x="170" y="64" width="330" height="32" style="fill:var(--green-bg);stroke:var(--green)"/>
+  <rect x="500" y="64" width="230" height="32" style="fill:var(--red-bg);stroke:var(--red)"/>
+  <text class="sm on-r" x="100" y="84" text-anchor="middle">&gt;50 为假</text>
+  <text class="sm on-g" x="335" y="84" text-anchor="middle">两个都为真 → 选中</text>
+  <text class="sm on-r" x="615" y="84" text-anchor="middle">&lt;200 为假</text>
+  <text class="mono" x="170" y="114" text-anchor="middle">50</text><text class="mono" x="500" y="114" text-anchor="middle">200</text>
+  <circle class="bx-a" cx="100" cy="80" r="6"/><text class="mono on-a" x="100" y="56" text-anchor="middle">T2=40</text>
+  <circle class="bx-a" cx="335" cy="80" r="6"/><text class="mono on-a" x="335" y="56" text-anchor="middle">T1=150</text>
+  <circle class="bx-a" cx="615" cy="80" r="6"/><text class="mono on-a" x="615" y="56" text-anchor="middle">T3=250</text>
+  <text class="lbl" x="380" y="144" text-anchor="middle">分支覆盖：2 个测试（整体为真、为假各一）就够</text>
+  <text class="lbl" x="380" y="164" text-anchor="middle">条件 + 分支覆盖：3 个测试，比如 T1=150、T2=40、T3=250</text>
+</svg>
+<figcaption>图 9-5　把第 3 章的覆盖准则用到 SQL 谓词上</figcaption>
+</figure>
+
+<p>Tuya、Suárez-Cabal 和 De La Riva 在《A practical guide to SQL white-box testing》（2006）中给出了五条设计 SQL 测试的指导：</p>
+
+<div class="tw">
+<table>
+  <tr><th>指导</th><th>含义</th></tr>
+  <tr><td>对 SQL 条件使用 MC/DC</td><td>判断出现在三个地方：<code>JOIN</code>、<code>WHERE</code>、<code>HAVING</code>。可以用 MC/DC 彻底检验查询的谓词（忘了 MC/DC？回看第 3 章）。</td></tr>
+  <tr><td>让 MC/DC 适应 NULL</td><td>数据库对 NULL 有特殊处理，覆盖准则要适应<strong>三值逻辑</strong>（真、假、NULL）：考虑值为 NULL 的可能。</td></tr>
+  <tr><td>对被选中的数据做类别划分</td><td>
+    <strong>检索的行：</strong>设计一个让查询一行都选不中的状态；
+    <strong>合并的行：</strong>输出中出现不想要的重复行是常见故障，设计一个会选中相同行的状态；
+    <strong>分组的行：</strong>对每个 GROUP BY 列，至少得到两个不同的分组；
+    <strong>子查询的行：</strong>让每个子查询返回零行或多行，至少包含一个 NULL 和两个不同的值；
+    <strong>聚合函数的值：</strong>对每个聚合函数（count 除外），至少有一个状态让它算出两个相等的值、一个不同的值；
+    <strong>其他表达式：</strong>LIKE、日期、字符串、类型转换等，用类别划分和边界检查。</td></tr>
+  <tr><td>检查输出</td><td>不仅检查输入域，也检查输出域：查询可能在某些列返回 NULL 或空值，让程序其余部分崩溃。</td></tr>
+  <tr><td>检查数据库约束</td><td>确保数据库真的执行了这些约束。</td></tr>
+</table>
+</div>
+
+<h3>为 SQL 查询写自动化测试</h3>
+
+<p>步骤很简单：① 建立数据库连接；② 让数据库处于正确的初始状态；③ 执行被测查询；④ 检查输出。场景：</p>
+<ul>
+  <li><code>invoice</code> 表有 name（varchar 100）和 value 两列；</li>
+  <li><code>InvoiceDao</code> 有三个方法：<code>save()</code> 执行 <code>INSERT INTO invoice (name, value) VALUES (?,?)</code>；<code>all()</code> 执行 <code>SELECT * FROM invoice</code>；<code>allWithAtLeast()</code> 执行 <code>SELECT * FROM invoice WHERE value &gt;= ?</code>。</li>
+</ul>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/sql/InvoiceDao.java（朴素的 JDBC 实现）"><pre>
+public class InvoiceDao {
+  private final Connection connection;          // DAO 持有一个数据库连接
+
+  public InvoiceDao(Connection connection) {
+    this.connection = connection;
+  }
+
+  public List&lt;Invoice&gt; all() {
+    try {
+      PreparedStatement ps = connection.prepareStatement("select * from invoice");
+      ResultSet rs = ps.executeQuery();
+      List&lt;Invoice&gt; allInvoices = new ArrayList&lt;&gt;();
+      while (rs.next()) {                       // 每一行变成一个 Invoice 实体
+        allInvoices.add(new Invoice(rs.getString("name"), rs.getInt("value")));
+      }
+      return allInvoices;
+    } catch (Exception e) {
+      throw new RuntimeException(e);            // 把受检异常转成非受检异常
+    }
+  }
+
+  public List&lt;Invoice&gt; allWithAtLeast(int value) {
+    try {
+      PreparedStatement ps = connection.prepareStatement("select * from invoice where value &gt;= ?");
+      ps.setInt(1, value);
+      ResultSet rs = ps.executeQuery();
+      List&lt;Invoice&gt; allInvoices = new ArrayList&lt;&gt;();
+      while (rs.next()) {
+        allInvoices.add(new Invoice(rs.getString("name"), rs.getInt("value")));
+      }
+      return allInvoices;
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public void save(Invoice inv) {
+    try {
+      PreparedStatement ps = connection.prepareStatement(
+          "insert into invoice (name, value) values (?,?)");
+      ps.setString(1, inv.customer);
+      ps.setInt(2, inv.value);
+      ps.execute();
+      connection.commit();
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="invoice_dao.py（sqlite3）"><pre>
+import sqlite3
+from dataclasses import dataclass
+
+@dataclass(frozen=True, order=True)
+class Invoice:
+    customer: str
+    value: int
+
+class InvoiceDao:
+    def __init__(self, connection: sqlite3.Connection):    # DAO 持有一个数据库连接
+        self._conn = connection
+
+    def all(self) -&gt; list[Invoice]:
+        rows = self._conn.execute("select name, value from invoice").fetchall()
+        return [Invoice(name, value) for name, value in rows]    # 每一行变成一个 Invoice
+
+    def all_with_at_least(self, value: int) -&gt; list[Invoice]:
+        rows = self._conn.execute(
+            "select name, value from invoice where value &gt;= ?", (value,)).fetchall()
+        return [Invoice(name, v) for name, v in rows]
+
+    def save(self, inv: Invoice) -&gt; None:
+        self._conn.execute("insert into invoice (name, value) values (?, ?)",
+                           (inv.customer, inv.value))
+        self._conn.commit()
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceDao.ts（node:sqlite）"><pre>
+import { DatabaseSync } from "node:sqlite";
+
+export interface Invoice { customer: string; value: number }
+
+export class InvoiceDao {
+  constructor(private readonly db: DatabaseSync) {}        // DAO 持有一个数据库连接
+
+  all(): Invoice[] {
+    return this.db.prepare("select name, value from invoice").all().map(toInvoice);
+  }
+
+  allWithAtLeast(value: number): Invoice[] {
+    return this.db.prepare("select name, value from invoice where value &gt;= ?").all(value).map(toInvoice);
+  }
+
+  save(inv: Invoice): void {
+    this.db.prepare("insert into invoice (name, value) values (?, ?)").run(inv.customer, inv.value);
+  }
+}
+
+const toInvoice = (r: Record&lt;string, unknown&gt;): Invoice =&gt;   // 每一行变成一个 Invoice
+  ({ customer: String(r.name), value: Number(r.value) });
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 真实项目请用专业的数据访问库</div>
+  <p>这是访问数据库的朴素方式。更复杂的项目应该用 jOOQ、Hibernate、Spring Data（Java），SQLAlchemy、Django ORM（Python），Prisma、Drizzle、Knex（TypeScript）等。</p>
+</div>
+
+<p>先测 <code>all()</code>。要让查询返回点什么，得先插入发票 —— 正好 DAO 有 <code>save()</code>：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="第一个 SQL 测试"><pre>
+@Test
+void save() {
+  Invoice inv1 = new Invoice("Mauricio", 10);
+  Invoice inv2 = new Invoice("Frank", 11);
+
+  dao.save(inv1);
+  List&lt;Invoice&gt; afterSaving = dao.all();
+  assertThat(afterSaving).containsExactlyInAnyOrder(inv1);    // 只有刚插入的那张
+
+  dao.save(inv2);
+  List&lt;Invoice&gt; afterSavingAgain = dao.all();
+  assertThat(afterSavingAgain).containsExactlyInAnyOrder(inv1, inv2);
+}
+// containsExactlyInAnyOrder 依赖 Invoice 正确实现 equals()
+</pre></div>
+<div class="code" data-lang="python" data-file="第一个 SQL 测试"><pre>
+def test_save(dao):
+    inv1 = Invoice("Mauricio", 10)
+    inv2 = Invoice("Frank", 11)
+
+    dao.save(inv1)
+    assert dao.all() == [inv1]                          # 只有刚插入的那张
+
+    dao.save(inv2)
+    assert sorted(dao.all()) == sorted([inv1, inv2])
+</pre></div>
+<div class="code" data-lang="ts" data-file="第一个 SQL 测试"><pre>
+test("save", () =&gt; {
+  const inv1 = { customer: "Mauricio", value: 10 };
+  const inv2 = { customer: "Frank", value: 11 };
+
+  dao.save(inv1);
+  expect(dao.all()).toEqual([inv1]);                  // 只有刚插入的那张
+
+  dao.save(inv2);
+  expect(dao.all()).toEqual(expect.arrayContaining([inv1, inv2]));
+  expect(dao.all()).toHaveLength(2);
+});
+</pre></div>
+</div>
+
+<h3>让每个测试都从干净的数据库开始</h3>
+
+<p>
+  测试逻辑没错，但别忘了<strong>数据库会永久保存数据</strong>。第一次跑存了两张发票；第二次跑又存两张，一共四张 —— 测试就失败了。
+  单元测试里从没有这个问题，对象都在内存里，测试结束就消失了。用真实数据库时必须保证干净的状态：测试前打开连接、清空数据库、（可选）准备好所需状态；测试后关闭连接。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="数据库测试的生命周期：打开连接并清空，执行测试，关闭连接">
+  <rect class="bx-b" x="20" y="40" width="220" height="90" rx="12"/>
+  <text class="ttl on-b" x="130" y="64" text-anchor="middle">每个测试之前</text>
+  <text class="sm" x="130" y="86" text-anchor="middle">打开连接 · 确保表结构存在</text>
+  <text class="sm" x="130" y="104" text-anchor="middle">清空表（truncate / delete）</text>
+  <text class="sm" x="130" y="120" text-anchor="middle">@BeforeEach / fixture</text>
+  <path class="ln" d="M242 85 H276" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="280" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-a" x="380" y="70" text-anchor="middle">测试本身</text>
+  <text class="sm" x="380" y="92" text-anchor="middle">准备数据 → 执行查询 → 断言</text>
+  <path class="ln" d="M482 85 H516" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="520" y="40" width="220" height="90" rx="12"/>
+  <text class="ttl on-g" x="630" y="64" text-anchor="middle">每个测试之后</text>
+  <text class="sm" x="630" y="86" text-anchor="middle">关闭连接</text>
+  <text class="sm" x="630" y="104" text-anchor="middle">（或整个测试集结束后再关）</text>
+  <text class="sm" x="630" y="120" text-anchor="middle">@AfterEach / yield 之后</text>
+  <text class="sm" x="380" y="158" text-anchor="middle">作者更喜欢在测试「之前」清空：这样能确定测试开始时数据库一定是干净的</text>
+</svg>
+<figcaption>图 9-6　数据库测试的生命周期</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/sql/SqlIntegrationTestBase.java"><pre>
+public class SqlIntegrationTestBase {
+  private Connection connection;
+  protected InvoiceDao dao;              // protected：子类测试可以直接用
+
+  @BeforeEach
+  void openConnectionAndCleanup() throws SQLException {
+    // 为了简单用 HSQLDB 内存数据库；真实系统可能要连和生产环境同类型的数据库
+    connection = DriverManager.getConnection("jdbc:hsqldb:mem:book");
+
+    // 确保表结构存在。真实应用里可能要复杂得多
+    PreparedStatement preparedStatement = connection.prepareStatement(
+        "create table if not exists invoice (name varchar(100), value double)");
+    preparedStatement.execute();
+    connection.commit();
+
+    dao = new InvoiceDao(connection);
+
+    // 清空表，确保之前测试的数据不会干扰
+    connection.prepareStatement("truncate table invoice").execute();
+  }
+
+  @AfterEach
+  void close() throws SQLException {
+    connection.close();                  // 也可以只在整个测试集结束时关（@BeforeAll/@AfterAll）
+  }
+}
+
+// 测试类继承基类，只关注测试本身
+public class InvoiceDaoIntegrationTest extends SqlIntegrationTestBase {
+  @Test void save() { /* …… */ }
+  @Test void atLeast() { /* …… */ }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="conftest.py（pytest fixture 代替基类）"><pre>
+import sqlite3
+import pytest
+from invoice_dao import InvoiceDao
+
+# pytest 里不需要基类：把 fixture 放在 conftest.py，同目录所有测试自动可用
+@pytest.fixture
+def dao():
+    # 为了简单用 SQLite 内存数据库；真实系统可能要连和生产环境同类型的数据库
+    connection = sqlite3.connect(":memory:")
+    connection.execute("create table if not exists invoice (name varchar(100), value int)")
+    connection.execute("delete from invoice")   # SQLite 没有 truncate，用 delete 清空
+    connection.commit()
+
+    yield InvoiceDao(connection)                # yield 之前：准备；之后：清理
+
+    connection.close()
+</pre></div>
+<div class="code" data-lang="ts" data-file="sqlIntegration.ts（共享的 beforeEach / afterEach）"><pre>
+import { beforeEach, afterEach } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { InvoiceDao } from "./invoiceDao";
+
+// 把数据库相关逻辑集中在一处，测试文件调用它即可
+export function useInvoiceDao(): () =&gt; InvoiceDao {
+  let db: DatabaseSync;
+  let dao: InvoiceDao;
+
+  beforeEach(() =&gt; {
+    // 为了简单用 SQLite 内存数据库；真实系统可能要连和生产环境同类型的数据库
+    db = new DatabaseSync(":memory:");
+    db.exec("create table if not exists invoice (name varchar(100), value integer)");
+    db.exec("delete from invoice");               // SQLite 没有 truncate，用 delete 清空
+    dao = new InvoiceDao(db);
+  });
+
+  afterEach(() =&gt; db.close());
+
+  return () =&gt; dao;
+}
+
+// ---- invoiceDao.test.ts ----
+// const getDao = useInvoiceDao();
+// test("save", () =&gt; { const dao = getDao(); /* …… */ });
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 数据库迁移工具</div>
+  <p>大型系统里，可以用 Flyway 或 Liquibase（Java）、Alembic（Python）、Prisma Migrate / Knex migrations（TypeScript）来管理表结构。除了帮你演进 schema，它们也能帮你清理数据库、确保表、约束和索引都就位。</p>
+</div>
+
+<p>再测 <code>allWithAtLeast()</code>，它有谓词 <code>where value &gt;= ?</code>，于是可以用上第 2 章的边界分析：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 130" role="img" aria-label="where value 大于等于问号的 on 点、off 点和 in 点">
+  <text class="mono" x="20" y="24">where value &gt;= ?     （用 ? = 50 测试）</text>
+  <path class="ln" d="M40 70 H720"/>
+  <path class="ln-g" d="M380 70 H720" style="stroke-width:6"/>
+  <circle class="bx-b" cx="320" cy="70" r="8"/><text class="lbl on-b" x="320" y="100" text-anchor="middle">off 点：49</text>
+  <circle class="bx-g" cx="380" cy="70" r="8"/><text class="lbl on-g" x="380" y="100" text-anchor="middle">on 点：50</text>
+  <circle class="bx-a" cx="440" cy="70" r="8"/><text class="lbl on-a" x="440" y="100" text-anchor="middle">in 点：51</text>
+  <text class="sm" x="600" y="56" text-anchor="middle">被选中</text>
+  <text class="sm" x="380" y="124" text-anchor="middle">on 点就是传进 SQL 的那个数；off 点是它减 1（让条件变假）；in 点不是必须，但便宜，而且让测试策略更易懂</text>
+</svg>
+<figcaption>图 9-7　SQL 谓词同样有边界</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/sql/InvoiceDaoIntegrationTest.java"><pre>
+@Test
+void atLeast() {
+  int value = 50;
+
+  Invoice inv1 = new Invoice("Mauricio", value - 1);   // off 点
+  Invoice inv2 = new Invoice("Arie", value);           // on 点
+  Invoice inv3 = new Invoice("Frank", value + 1);      // in 点
+
+  dao.save(inv1);
+  dao.save(inv2);
+  dao.save(inv3);
+
+  List&lt;Invoice&gt; afterSaving = dao.allWithAtLeast(value);
+  assertThat(afterSaving).containsExactlyInAnyOrder(inv2, inv3);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_invoice_dao.py"><pre>
+def test_at_least(dao):
+    value = 50
+    inv1 = Invoice("Mauricio", value - 1)    # off 点
+    inv2 = Invoice("Arie", value)            # on 点
+    inv3 = Invoice("Frank", value + 1)       # in 点
+    for inv in (inv1, inv2, inv3):
+        dao.save(inv)
+
+    assert sorted(dao.all_with_at_least(value)) == sorted([inv2, inv3])
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceDao.test.ts"><pre>
+test("at least", () =&gt; {
+  const dao = getDao();
+  const value = 50;
+  const inv1 = { customer: "Mauricio", value: value - 1 };   // off 点
+  const inv2 = { customer: "Arie", value };                  // on 点
+  const inv3 = { customer: "Frank", value: value + 1 };      // in 点
+  for (const inv of [inv1, inv2, inv3]) dao.save(inv);
+
+  const result = dao.allWithAtLeast(value);
+  expect(result).toEqual(expect.arrayContaining([inv2, inv3]));
+  expect(result).toHaveLength(2);
+});
+</pre></div>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 永远只对测试数据库跑测试</div>
+  <p>测试应该运行在专门为测试准备的数据库上。不用说，你绝不想对生产数据库跑测试。</p>
+</div>
+
+<h3>测试基础设施该做什么</h3>
+
+<p>表结构一复杂，打开连接、重置状态就会变得冗长。<strong>投资测试基础设施</strong>：开发者想写集成测试时，不需要手动建连接或处理事务，这些应该由测试基类（或 fixture）直接提供。数据库逻辑集中在一处，将来改动也只需改一个地方。</p>
+
+<div class="cards">
+  <div class="card"><h4>打开数据库连接</h4><p>JDBC、Hibernate 或你用的持久化框架的连接。有时可以整个测试集只开一个连接（<code>@BeforeAll</code>，或 pytest 的 <code>scope="session"</code>）。</p></div>
+  <div class="card"><h4>开启和提交事务</h4><p>常见做法是测试开始时开启事务、结束时提交；也有人从不提交，测试结束就回滚。这是集成测试，作者建议<strong>每个测试方法</strong>提交一次事务。</p></div>
+  <div class="card"><h4>重置数据库状态</h4><p>每个测试都从干净的状态开始：正确的表结构，表里没有意外数据。最简单的办法是每个测试开始时 truncate 所有表，手动或借助框架。</p></div>
+  <div class="card"><h4>减少测试代码量的辅助方法</h4><p>SQL 集成测试可能很长。能被多个测试复用的代码 —— 对象构建器、常用断言、特定数据库操作 —— 都提取出来放进基类或 fixture。</p></div>
+</div>
+
+<h3>最佳实践</h3>
+<ul>
+  <li><strong>用测试数据构建器（Test Data Builder）。</strong>真实实体远比两个字段的 Invoice 复杂，你不想为了一张发票写 15 行代码、传 20 个参数。第 10 章会讲怎么实现。</li>
+  <li><strong>用好的、可复用的断言 API。</strong>很多查询返回对象列表，断言库提供了多种断言方式。某个复杂断言被多个测试需要，就封装成辅助方法。</li>
+  <li><strong>最小化所需数据。</strong>测试只需要两张表，就只往两张表插数据；只需要 10 行，就只插 10 行。</li>
+  <li><strong>考虑 schema 的演进。</strong>真实系统的表结构变化很快，测试集要对此有韧性。如果发现一个测试会被未来的改动破坏，想办法减少需要修改的地方。数据库变了，测试数据库也要同步 —— 迁移框架可以代劳。</li>
+  <li><strong>用（或不用）内存数据库。</strong>和生产同类型的数据库更真实，测试会运行同一个 SQL 引擎；内存数据库则便宜得多。作者写 SQL 集成测试时<strong>倾向于用真实数据库</strong>。</li>
+</ul>
+
+<div class="box tip">
+  <div class="t">&#128161; 现代做法：用容器启动真实数据库</div>
+  <p>
+    Testcontainers（Java、Python、Node 都有）可以在测试里用 Docker 临时启动一个真实的 Postgres/MySQL，测试结束自动销毁。
+    这样既能用和生产相同的数据库引擎，又不需要手动维护一个共享的测试数据库。CI 上也很好用。
+  </p>
+</div>
+
+<h2 id="system">系统测试：测整个 Web 应用</h2>
+
+<p>
+  到了某个时候，你的类、业务规则、持久层等被组合成一个 Web 应用。用户访问页面、与元素交互，触发更多请求和响应。
+  比如宠物诊所：用户打开今天的预约列表，点「新建预约」，填写宠物和主人的名字，选一个空闲时段，回到列表页，看到新增的预约。
+  如果它是按照前几章的方法开发的，每个单元都已经有了（系统化的）单元测试。这一节讨论：Web 应用里还要测什么、用什么工具自动操作浏览器，以及系统测试的最佳实践。这些思想同样适用于任何类型的软件。
+</p>
+
+<h3>工具：Selenium 与 Playwright</h3>
+
+<p>
+  <strong>Selenium</strong> 是经典的 Web 测试框架，可以连接并控制任何浏览器，通过 API 下达「打开这个 URL」「找到页面上这个元素、取它的文字」「点那个按钮」之类的命令。
+  书里用 Java + Selenium。Python 和 TypeScript 标签页里我们用 <strong>Playwright</strong> —— 一个更现代的选择，自带浏览器管理和<strong>自动等待</strong>，Python 和 TypeScript 都有官方 API（Selenium 同样支持这两种语言）。
+</p>
+
+<p>
+  示例应用是 <strong>Spring PetClinic</strong>，一个用 Spring Boot（Java Web 开发的主流框架）写的简单宠物诊所应用。本仓库 <code>ch9</code> 目录里有编译好的 jar，
+  运行 <code>java -jar spring-petclinic-2.5.0-SNAPSHOT.jar</code>，访问 <code>localhost:8080</code> 就能看到它。
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/FirstSeleniumTest.java"><pre>
+public class FirstSeleniumTest {
+  @Test
+  void firstSeleniumTest() {
+    WebDriver browser = new SafariDriver();        // 选择驱动 = 选择浏览器
+
+    browser.get("http://localhost:8080");          // 访问页面
+
+    WebElement welcomeHeader = browser.findElement(By.tagName("h2"));   // 找到 HTML 元素
+    assertThat(welcomeHeader.getText()).isEqualTo("Welcome");           // 断言页面内容
+
+    browser.close();                               // 关闭浏览器和 Selenium 会话
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_first_playwright.py（pytest-playwright）"><pre>
+# pip install pytest-playwright &amp;&amp; playwright install chromium
+from playwright.sync_api import Page, expect
+
+def test_first_playwright(page: Page):         # pytest-playwright 提供 page fixture，并负责开关浏览器
+    page.goto("http://localhost:8080")          # 访问页面
+
+    welcome_header = page.locator("h2")         # 找到 HTML 元素
+    expect(welcome_header).to_have_text("Welcome")   # 断言页面内容（会自动等待直到满足或超时）
+</pre></div>
+<div class="code" data-lang="ts" data-file="first.spec.ts（@playwright/test）"><pre>
+// npm i -D @playwright/test &amp;&amp; npx playwright install chromium
+import { test, expect } from "@playwright/test";
+
+test("first playwright test", async ({ page }) =&gt; {   // 框架提供 page，并负责开关浏览器
+  await page.goto("http://localhost:8080");          // 访问页面
+
+  const welcomeHeader = page.locator("h2");          // 找到 HTML 元素
+  await expect(welcomeHeader).toHaveText("Welcome"); // 断言页面内容（会自动等待直到满足或超时）
+});
+</pre></div>
+</div>
+
+<ol class="steps">
+  <li><strong>选浏览器。</strong><code>new SafariDriver()</code> 实例化一个 Safari；<code>WebDriver</code> 是所有浏览器都实现的抽象，换成 Firefox 或 Chrome 也行（Chrome 需要额外下载 ChromeDriver）。作者用 Mac，Safari 不需要额外驱动。Playwright 会自己下载和管理浏览器。</li>
+  <li><strong>访问 URL。</strong>注意：Selenium 不是在模拟浏览器，而是在<strong>驱动真实的浏览器</strong>。</li>
+  <li><strong>定位元素。</strong>需要一点 HTML 和 DOM 知识：检查 PetClinic 的 HTML，发现欢迎语在一个 h2 标签里。可以按名字、ID、CSS 类、标签名来找元素。</li>
+  <li><strong>断言。</strong>取出元素的文字，像以前一样断言。</li>
+  <li><strong>关闭浏览器。</strong>释放测试使用的所有资源，永远是好习惯。</li>
+</ol>
+
+<h3>该测什么：用户旅程</h3>
+
+<p>
+  按照测试金字塔，Web 应用的各个单元（Owner、Pet 等实体）已经有单元测试，DAO 里的查询也有集成测试了。还剩什么要测？<strong>用户旅程（user journey）</strong>。
+  Martin Fowler（2003）的定义：「用户旅程测试是一种面向业务的测试，模拟典型用户在系统中的旅程。它通常覆盖用户为达成某个目标而与系统的完整交互，是用例中的一条路径。」
+  PetClinic 里的旅程：查找主人、添加新主人、给主人添加宠物、记录宠物就诊……我们来测「查找主人」。
+</p>
+
+<h3>页面对象（Page Object）</h3>
+
+<p>我们用<strong>页面对象模式</strong>来写：为每个页面定义一个类，封装操作这个页面所需的全部 Selenium / Playwright 逻辑。测试代码只和页面对象打交道，不直接找 HTML 元素。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="每个网页对应一个页面对象；测试通过页面对象完成用户旅程">
+  <text class="ttl" x="160" y="22" text-anchor="middle">网页</text>
+  <text class="ttl" x="560" y="22" text-anchor="middle">页面对象（测试代码中的类）</text>
+
+  <rect class="bx" x="40" y="40" width="240" height="60" rx="8"/>
+  <text class="mono" x="160" y="64" text-anchor="middle">/owners/new</text>
+  <text class="sm" x="160" y="84" text-anchor="middle">添加主人的表单</text>
+  <rect class="bx" x="40" y="120" width="240" height="60" rx="8"/>
+  <text class="mono" x="160" y="144" text-anchor="middle">/owners/find</text>
+  <text class="sm" x="160" y="164" text-anchor="middle">按姓氏查找</text>
+  <rect class="bx" x="40" y="200" width="240" height="60" rx="8"/>
+  <text class="mono" x="160" y="224" text-anchor="middle">/owners?lastName=Doe</text>
+  <text class="sm" x="160" y="244" text-anchor="middle">主人列表（HTML 表格）</text>
+
+  <rect class="bx-b" x="440" y="40" width="240" height="60" rx="8"/>
+  <text class="ttl on-b" x="560" y="64" text-anchor="middle">AddOwnerPage</text>
+  <text class="mono" x="560" y="84" text-anchor="middle">visit() · add(info)</text>
+  <rect class="bx-b" x="440" y="120" width="240" height="60" rx="8"/>
+  <text class="ttl on-b" x="560" y="144" text-anchor="middle">FindOwnersPage</text>
+  <text class="mono" x="560" y="164" text-anchor="middle">visit() · findOwners(name)</text>
+  <rect class="bx-b" x="440" y="200" width="240" height="60" rx="8"/>
+  <text class="ttl on-b" x="560" y="224" text-anchor="middle">ListOfOwnersPage</text>
+  <text class="mono" x="560" y="244" text-anchor="middle">isReady() · all()</text>
+
+  <path class="ln-d" d="M282 70 H436"/><path class="ln-d" d="M282 150 H436"/><path class="ln-d" d="M282 230 H436"/>
+  <path class="ln-a" d="M684 160 C712 180 712 210 684 226" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="704" y="190">返回</text><text class="sm on-a" x="704" y="206">下一页</text>
+  <text class="sm" x="380" y="282" text-anchor="middle">页面对象提供优雅的方法来操作页面；测试方法用它们来测 Web 应用</text>
+</svg>
+<figcaption>图 9-8　网页与页面对象一一对应；一个页面的动作会「带你」到下一个页面</figcaption>
+</figure>
+
+<p>作者喜欢先设计页面对象。先写一个<strong>基类</strong>，放所有页面对象的公共行为：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/pages/PetClinicPageObject.java"><pre>
+public abstract class PetClinicPageObject {
+  protected final WebDriver driver;             // 所有页面对象都持有 WebDriver
+
+  public PetClinicPageObject(WebDriver driver) {
+    this.driver = driver;
+  }
+
+  public void visit() {                         // 需要被子类覆盖
+    throw new RuntimeException("This page does not have a visit link");
+  }
+
+  protected void visit(String url) {            // 帮子类拼出完整 URL 并等待页面就绪
+    driver.get("http://localhost:8080" + url);  // 写死的地址可以来自配置文件
+    isReady();
+  }
+
+  public abstract void isReady();               // 强制每个页面对象实现「就绪」判断
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pages/base.py"><pre>
+import os
+from playwright.sync_api import Page
+
+class PetClinicPageObject:
+    base_url = os.environ.get("PETCLINIC_URL", "http://localhost:8080")   # 配置来自环境变量
+
+    def __init__(self, page: Page):             # 所有页面对象都持有 Page
+        self.page = page
+
+    def visit(self) -&gt; None:                    # 需要被子类覆盖
+        raise NotImplementedError("This page does not have a visit link")
+
+    def _visit(self, path: str) -&gt; None:        # 帮子类拼出完整 URL 并等待页面就绪
+        self.page.goto(self.base_url + path)
+        self.is_ready()
+
+    def is_ready(self) -&gt; None:                 # 强制每个页面对象实现「就绪」判断
+        raise NotImplementedError
+</pre></div>
+<div class="code" data-lang="ts" data-file="pages/base.ts"><pre>
+import { Page } from "@playwright/test";
+
+export abstract class PetClinicPageObject {
+  static baseUrl = process.env.PETCLINIC_URL ?? "http://localhost:8080";   // 配置来自环境变量
+
+  constructor(protected readonly page: Page) {}  // 所有页面对象都持有 Page
+
+  async visit(): Promise&lt;void&gt; {                 // 需要被子类覆盖
+    throw new Error("This page does not have a visit link");
+  }
+
+  protected async visitPath(path: string): Promise&lt;void&gt; {   // 拼出完整 URL 并等待页面就绪
+    await this.page.goto(PetClinicPageObject.baseUrl + path);
+    await this.isReady();
+  }
+
+  abstract isReady(): Promise&lt;void&gt;;             // 强制每个页面对象实现「就绪」判断
+}
+</pre></div>
+</div>
+
+<p><strong>查找主人页面</strong>：在 Last Name 输入框里填姓氏，点「Find Owner」按钮。按钮没有 ID，但它所在的表单有（<code>search-owner-form</code>），所以先找表单再找里面的按钮。点击后网站会跳到另一个页面，所以这个方法<strong>返回下一个页面对象</strong>：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/pages/FindOwnersPage.java"><pre>
+public class FindOwnersPage extends PetClinicPageObject {
+  public FindOwnersPage(WebDriver driver) {
+    super(driver);
+  }
+
+  @Override
+  public void visit() {
+    visit("/owners/find");
+  }
+
+  @Override
+  public void isReady() {
+    WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+    wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("search-owner-form")));
+  }
+
+  public ListOfOwnersPage findOwners(String ownerLastName) {
+    driver.findElement(By.id("lastName")).sendKeys(ownerLastName);   // 按 ID 找输入框并输入
+    WebElement findOwnerButton = driver
+        .findElement(By.id("search-owner-form"))                     // 先找表单
+        .findElement(By.tagName("button"));                          // 再找表单里的按钮
+    findOwnerButton.click();
+
+    ListOfOwnersPage listOfOwnersPage = new ListOfOwnersPage(driver);
+    listOfOwnersPage.isReady();                                      // 等新页面就绪
+    return listOfOwnersPage;                                         // 一个页面带你去另一个页面
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pages/find_owners.py"><pre>
+from pages.base import PetClinicPageObject
+from pages.list_of_owners import ListOfOwnersPage
+
+class FindOwnersPage(PetClinicPageObject):
+    def visit(self) -&gt; None:
+        self._visit("/owners/find")
+
+    def is_ready(self) -&gt; None:
+        self.page.locator("#search-owner-form").wait_for(state="visible", timeout=3000)
+
+    def find_owners(self, owner_last_name: str) -&gt; ListOfOwnersPage:
+        self.page.locator("#lastName").fill(owner_last_name)          # 按 ID 找输入框并输入
+        self.page.locator("#search-owner-form button").click()        # 表单里的按钮
+
+        list_page = ListOfOwnersPage(self.page)
+        list_page.is_ready()                                          # 等新页面就绪
+        return list_page                                              # 一个页面带你去另一个页面
+</pre></div>
+<div class="code" data-lang="ts" data-file="pages/findOwnersPage.ts"><pre>
+import { PetClinicPageObject } from "./base";
+import { ListOfOwnersPage } from "./listOfOwnersPage";
+
+export class FindOwnersPage extends PetClinicPageObject {
+  async visit(): Promise&lt;void&gt; {
+    await this.visitPath("/owners/find");
+  }
+
+  async isReady(): Promise&lt;void&gt; {
+    await this.page.locator("#search-owner-form").waitFor({ state: "visible", timeout: 3000 });
+  }
+
+  async findOwners(ownerLastName: string): Promise&lt;ListOfOwnersPage&gt; {
+    await this.page.locator("#lastName").fill(ownerLastName);        // 按 ID 找输入框并输入
+    await this.page.locator("#search-owner-form button").click();    // 表单里的按钮
+
+    const listPage = new ListOfOwnersPage(this.page);
+    await listPage.isReady();                                        // 等新页面就绪
+    return listPage;                                                 // 一个页面带你去另一个页面
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  <strong>为什么要 isReady()？</strong>这是 Web 应用，请求和响应需要时间。页面还没加载完就去找元素，测试会失败。Selenium 提供了等待的 API：
+  这里最多等 3 秒，直到某个元素出现。为什么是 3 秒？作者说是猜的，实践中你要找到最适合你测试的数字。（Playwright 的大多数操作和 <code>expect</code> 本身就会自动等待。）
+</p>
+
+<p><strong>主人列表页面</strong>：一个 HTML 表格，每行是一位主人。页面对象把 HTML 行转成一个与 HTML 无关的 <code>OwnerInfo</code> 对象列表：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/pages/ListOfOwnersPage.java"><pre>
+public class ListOfOwnersPage extends PetClinicPageObject {
+  public ListOfOwnersPage(WebDriver driver) {
+    super(driver);
+  }
+
+  @Override
+  public void isReady() {       // 主人表格加载出来，页面就算就绪；最多等 3 秒
+    WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+    wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("owners")));
+  }
+
+  public List&lt;OwnerInfo&gt; all() {
+    List&lt;OwnerInfo&gt; owners = new ArrayList&lt;&gt;();
+    WebElement table = driver.findElement(By.id("owners"));
+    List&lt;WebElement&gt; rows = table.findElement(By.tagName("tbody"))    // #owners &gt; tbody &gt; tr：跳过表头
+        .findElements(By.tagName("tr"));
+
+    for (WebElement row : rows) {
+      List&lt;WebElement&gt; columns = row.findElements(By.tagName("td"));
+      String name = columns.get(0).getText().trim();                  // 第 1 列：名字
+      String address = columns.get(1).getText().trim();               // 第 2 列：地址……
+      String city = columns.get(2).getText().trim();
+      String telephone = columns.get(3).getText().trim();
+      String pets = columns.get(4).getText().trim();
+      owners.add(new OwnerInfo(name, address, city, telephone, pets));
+    }
+    return owners;               // OwnerInfo 对 HTML 一无所知
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pages/list_of_owners.py"><pre>
+from dataclasses import dataclass
+from pages.base import PetClinicPageObject
+
+@dataclass(frozen=True)
+class OwnerInfo:                   # 对 HTML 一无所知的纯数据
+    name: str
+    address: str
+    city: str
+    telephone: str
+    pets: str
+
+class ListOfOwnersPage(PetClinicPageObject):
+    def is_ready(self) -&gt; None:    # 主人表格加载出来，页面就算就绪；最多等 3 秒
+        self.page.locator("#owners").wait_for(state="visible", timeout=3000)
+
+    def all(self) -&gt; list[OwnerInfo]:
+        rows = self.page.locator("#owners tbody tr")               # tbody 里的行：跳过表头
+        owners = []
+        for i in range(rows.count()):
+            cells = [c.strip() for c in rows.nth(i).locator("td").all_inner_texts()]
+            owners.append(OwnerInfo(*cells[:5]))                   # 名字、地址、城市、电话、宠物
+        return owners
+</pre></div>
+<div class="code" data-lang="ts" data-file="pages/listOfOwnersPage.ts"><pre>
+import { PetClinicPageObject } from "./base";
+
+export interface OwnerInfo {       // 对 HTML 一无所知的纯数据
+  name: string;
+  address: string;
+  city: string;
+  telephone: string;
+  pets: string;
+}
+
+export class ListOfOwnersPage extends PetClinicPageObject {
+  async isReady(): Promise&lt;void&gt; { // 主人表格加载出来，页面就算就绪；最多等 3 秒
+    await this.page.locator("#owners").waitFor({ state: "visible", timeout: 3000 });
+  }
+
+  async all(): Promise&lt;OwnerInfo[]&gt; {
+    const rows = this.page.locator("#owners tbody tr");            // tbody 里的行：跳过表头
+    const owners: OwnerInfo[] = [];
+    for (const row of await rows.all()) {
+      const [name, address, city, telephone, pets] =
+        (await row.locator("td").allInnerTexts()).map((t) =&gt; t.trim());
+      owners.push({ name, address, city, telephone, pets });
+    }
+    return owners;
+  }
+}
+</pre></div>
+</div>
+
+<p>要查找主人，应用里得先有主人。所以还需要<strong>添加主人页面</strong>：填写表单（所有输入框都有 ID，省事），点添加按钮，应用会跳到主人详情页。<code>AddOwnerInfo</code> 是专门为这个页面设计的数据结构：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/pages/AddOwnerPage.java + AddOwnerInfo"><pre>
+public class AddOwnerPage extends PetClinicPageObject {
+  public AddOwnerPage(WebDriver driver) {
+    super(driver);
+  }
+
+  @Override
+  public void visit() {
+    visit("/owners/new");
+  }
+
+  @Override
+  public void isReady() {        // 表单出现，页面就算就绪
+    WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+    wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("add-owner-form")));
+  }
+
+  public OwnerInformationPage add(AddOwnerInfo ownerToBeAdded) {
+    driver.findElement(By.id("firstName")).sendKeys(ownerToBeAdded.getFirstName());
+    driver.findElement(By.id("lastName")).sendKeys(ownerToBeAdded.getLastName());
+    driver.findElement(By.id("address")).sendKeys(ownerToBeAdded.getAddress());
+    driver.findElement(By.id("city")).sendKeys(ownerToBeAdded.getCity());
+    driver.findElement(By.id("telephone")).sendKeys(ownerToBeAdded.getTelephone());
+    driver.findElement(By.id("add-owner-form")).findElement(By.tagName("button")).click();
+
+    OwnerInformationPage ownerInformationPage = new OwnerInformationPage(driver);   // 跳到详情页
+    ownerInformationPage.isReady();
+    return ownerInformationPage;
+  }
+}
+
+public class AddOwnerInfo {
+  private String firstName, lastName, address, city, telephone;
+  // 构造函数、getter……
+
+  public OwnerInfo toOwnerInfo() {   // 列表页里名字是「名 姓」合在一起的
+    return new OwnerInfo(firstName + " " + lastName, address, city, telephone, "");
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pages/add_owner.py"><pre>
+from dataclasses import dataclass
+from pages.base import PetClinicPageObject
+from pages.list_of_owners import OwnerInfo
+
+@dataclass(frozen=True)
+class AddOwnerInfo:
+    first_name: str
+    last_name: str
+    address: str
+    city: str
+    telephone: str
+
+    def to_owner_info(self) -&gt; OwnerInfo:   # 列表页里名字是「名 姓」合在一起的
+        return OwnerInfo(f"{self.first_name} {self.last_name}",
+                         self.address, self.city, self.telephone, "")
+
+class AddOwnerPage(PetClinicPageObject):
+    def visit(self) -&gt; None:
+        self._visit("/owners/new")
+
+    def is_ready(self) -&gt; None:             # 表单出现，页面就算就绪
+        self.page.locator("#add-owner-form").wait_for(state="visible", timeout=3000)
+
+    def add(self, owner: AddOwnerInfo) -&gt; None:
+        self.page.locator("#firstName").fill(owner.first_name)
+        self.page.locator("#lastName").fill(owner.last_name)
+        self.page.locator("#address").fill(owner.address)
+        self.page.locator("#city").fill(owner.city)
+        self.page.locator("#telephone").fill(owner.telephone)
+        self.page.locator("#add-owner-form button").click()
+        self.page.wait_for_url("**/owners/*")                 # 跳到主人详情页
+</pre></div>
+<div class="code" data-lang="ts" data-file="pages/addOwnerPage.ts"><pre>
+import { PetClinicPageObject } from "./base";
+import { OwnerInfo } from "./listOfOwnersPage";
+
+export class AddOwnerInfo {
+  constructor(readonly firstName: string, readonly lastName: string,
+              readonly address: string, readonly city: string, readonly telephone: string) {}
+
+  toOwnerInfo(): OwnerInfo {                  // 列表页里名字是「名 姓」合在一起的
+    return { name: `${this.firstName} ${this.lastName}`, address: this.address,
+             city: this.city, telephone: this.telephone, pets: "" };
+  }
+}
+
+export class AddOwnerPage extends PetClinicPageObject {
+  async visit(): Promise&lt;void&gt; {
+    await this.visitPath("/owners/new");
+  }
+
+  async isReady(): Promise&lt;void&gt; {            // 表单出现，页面就算就绪
+    await this.page.locator("#add-owner-form").waitFor({ state: "visible", timeout: 3000 });
+  }
+
+  async add(owner: AddOwnerInfo): Promise&lt;void&gt; {
+    await this.page.locator("#firstName").fill(owner.firstName);
+    await this.page.locator("#lastName").fill(owner.lastName);
+    await this.page.locator("#address").fill(owner.address);
+    await this.page.locator("#city").fill(owner.city);
+    await this.page.locator("#telephone").fill(owner.telephone);
+    await this.page.locator("#add-owner-form button").click();
+    await this.page.waitForURL("**/owners/*");               // 跳到主人详情页
+  }
+}
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 两个数据结构还是一个？</div>
+  <p>AddOwnerInfo（添加页用，名和姓分开）和 OwnerInfo（列表页返回，名和姓合在一起）不一样。可以用同一个数据结构，也可以分开设计；作者选择分开，于是需要 <code>toOwnerInfo()</code> 转换。</p>
+</div>
+
+<p>现在可以写第一个旅程了：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch9/system/FindOwnersFlowTest.java"><pre>
+public class FindOwnersFlowTest {
+  // 整个测试类共用一个 WebDriver，省去每个测试开关浏览器的时间。现在浏览器是写死的
+  protected static WebDriver driver = new SafariDriver();
+  private FindOwnersPage page = new FindOwnersPage(driver);
+
+  @AfterAll
+  static void close() {           // 测试集结束时关闭 Selenium 驱动（也适合挪到基类里）
+    driver.close();
+  }
+
+  @Test
+  void findOwnersBasedOnTheirLastNames() {
+    AddOwnerInfo owner1 = new AddOwnerInfo("John", "Doe", "some address", "some city", "11111");
+    AddOwnerInfo owner2 = new AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111");
+    AddOwnerInfo owner3 = new AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111");
+    addOwners(owner1, owner2, owner3);       // 先要有主人
+
+    page.visit();                            // 访问查找页
+    ListOfOwnersPage listPage = page.findOwners("Doe");
+    List&lt;OwnerInfo&gt; all = listPage.all();
+
+    assertThat(all).hasSize(2)               // 只有 Doe 家的 John 和 Jane
+        .containsExactlyInAnyOrder(owner1.toOwnerInfo(), owner2.toOwnerInfo());
+  }
+
+  private void addOwners(AddOwnerInfo... owners) {   // 通过「添加主人」页面逐个添加
+    AddOwnerPage addOwnerPage = new AddOwnerPage(driver);
+    for (AddOwnerInfo owner : owners) {
+      addOwnerPage.visit();
+      addOwnerPage.add(owner);
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_find_owners_flow.py"><pre>
+from playwright.sync_api import Page
+from pages.add_owner import AddOwnerInfo, AddOwnerPage
+from pages.find_owners import FindOwnersPage
+
+def test_find_owners_based_on_their_last_names(page: Page):
+    owner1 = AddOwnerInfo("John", "Doe", "some address", "some city", "11111")
+    owner2 = AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111")
+    owner3 = AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111")
+    add_owners(page, owner1, owner2, owner3)            # 先要有主人
+
+    find_page = FindOwnersPage(page)
+    find_page.visit()                                   # 访问查找页
+    all_owners = find_page.find_owners("Doe").all()
+
+    assert sorted(all_owners, key=lambda o: o.name) == sorted(   # 只有 Doe 家的 John 和 Jane
+        [owner1.to_owner_info(), owner2.to_owner_info()], key=lambda o: o.name)
+
+def add_owners(page: Page, *owners: AddOwnerInfo) -&gt; None:    # 通过「添加主人」页面逐个添加
+    add_page = AddOwnerPage(page)
+    for owner in owners:
+        add_page.visit()
+        add_page.add(owner)
+</pre></div>
+<div class="code" data-lang="ts" data-file="findOwnersFlow.spec.ts"><pre>
+import { test, expect, Page } from "@playwright/test";
+import { AddOwnerInfo, AddOwnerPage } from "./pages/addOwnerPage";
+import { FindOwnersPage } from "./pages/findOwnersPage";
+
+test("find owners based on their last names", async ({ page }) =&gt; {
+  const owner1 = new AddOwnerInfo("John", "Doe", "some address", "some city", "11111");
+  const owner2 = new AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111");
+  const owner3 = new AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111");
+  await addOwners(page, owner1, owner2, owner3);      // 先要有主人
+
+  const findPage = new FindOwnersPage(page);
+  await findPage.visit();                             // 访问查找页
+  const all = await (await findPage.findOwners("Doe")).all();
+
+  expect(all).toHaveLength(2);                        // 只有 Doe 家的 John 和 Jane
+  expect(all).toEqual(expect.arrayContaining([owner1.toOwnerInfo(), owner2.toOwnerInfo()]));
+});
+
+async function addOwners(page: Page, ...owners: AddOwnerInfo[]) {   // 通过「添加主人」页面逐个添加
+  const addPage = new AddOwnerPage(page);
+  for (const owner of owners) {
+    await addPage.visit();
+    await addPage.add(owner);
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  运行它，简直像魔法：浏览器打开，主人的名字被敲进页面，按钮被点击，页面切换，浏览器关闭，测试通过。
+  （我们在本页写作时，用本仓库的 PetClinic jar 实际运行了 Python 和 TypeScript 版本，都通过了。）
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 再跑一次，它会失败</div>
+  <p>列表会返回四个人而不是两个 —— 我们运行的是完整的 Web 应用，数据被持久化在数据库里了。必须能在每次测试前重置 Web 应用，见下面的最佳实践。</p>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 系统测试贵在前期</div>
+  <p>为一条旅程写测试，比写单元测试多得多的工作量，系统测试天生更贵。但请注意：一旦有了页面对象这套初始结构，<strong>再加新测试就容易多了</strong>。高成本发生在现在，搭建基础设施的时候。一个好练习：为应用的其他旅程写测试（这需要更多页面对象！）。</p>
+</div>
+
+<h3>模式与最佳实践</h3>
+
+<p>这些模式来自作者多年写这类测试的经验，其中一些他和 Guerra、Gerosa 在 2014 年的 PLoP 会议上提出过。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="Web 测试通过仅在测试环境开放的后门 API 来准备数据和重置应用">
+  <rect class="bx-a" x="20" y="80" width="170" height="70" rx="12"/>
+  <text class="ttl on-a" x="105" y="110" text-anchor="middle">Web 测试</text>
+  <text class="sm" x="105" y="130" text-anchor="middle">页面对象 + 断言</text>
+  <rect class="bx-b" x="300" y="20" width="200" height="190" rx="12"/>
+  <text class="ttl on-b" x="400" y="46" text-anchor="middle">被测 Web 应用</text>
+  <rect class="bx" x="320" y="64" width="160" height="40" rx="6"/><text class="lbl" x="400" y="89" text-anchor="middle">网页</text>
+  <rect class="bx-r" x="320" y="120" width="160" height="40" rx="6"/><text class="lbl on-r" x="400" y="138" text-anchor="middle">测试专用 API</text><text class="sm on-r" x="400" y="153" text-anchor="middle">仅测试环境开放！</text>
+  <rect class="bx" x="340" y="172" width="120" height="30" rx="15"/><text class="sm" x="400" y="192" text-anchor="middle">数据库</text>
+  <path class="ln" d="M192 100 H316" marker-end="url(#ar)"/>
+  <text class="sm" x="254" y="92" text-anchor="middle">走被测的旅程</text>
+  <path class="ln-r" d="M192 130 H316" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="254" y="148" text-anchor="middle">造数据 / 重置</text>
+  <path class="ln" d="M400 162 V170"/>
+  <rect class="bx" x="560" y="40" width="180" height="150" rx="12"/>
+  <text class="ttl" x="650" y="66" text-anchor="middle">为什么？</text>
+  <text class="sm" x="650" y="92" text-anchor="middle">靠点页面准备 10 个实体</text>
+  <text class="sm" x="650" y="110" text-anchor="middle">又慢又麻烦</text>
+  <text class="sm" x="650" y="140" text-anchor="middle">每个测试都要从</text>
+  <text class="sm" x="650" y="158" text-anchor="middle">干净的应用开始</text>
+</svg>
+<figcaption>图 9-9　给测试开一扇「后门」来准备状态和重置应用（但千万别部署到生产环境）</figcaption>
+</figure>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128295;</span><h4>提供让系统进入所需状态的方式</h4><p>测试需要 10 个实体时，按顺序访问 10 个页面太慢太累。可以提供（REST）Web 服务让测试直接造数据；测试这边再写一个类（如 <code>OwnersAPI</code>）封装调用细节。担心安全？这些 API 只在测试环境开放。甚至可以专门为测试设计一个能一次造好复杂数据的服务。</p></div>
+  <div class="card"><span class="ic">&#129529;</span><h4>每个测试都在干净的环境中运行</h4><p>和 SQL 测试一样，否则测试可能因为 Bug 以外的原因失败。可以用同样的办法：应用提供一个重置的后门（比如清空所有表）。<strong>警告：</strong>这个后门绝不能部署到生产环境，否则后果不堪设想！</p></div>
+  <div class="card"><span class="ic">&#127991;</span><h4>给 HTML 元素起有意义的名字</h4><p>UI 变化频繁，所以 Web 测试常常很不稳定。给测试要用的元素加上唯一的 ID 或名字，即使元素本来不需要。ID 不稳定（动态生成）时，用 HTML5 的自定义属性，如 <code>data-selenium="customer-name"</code>。动手前先和前端负责人聊聊。</p></div>
+  <div class="card"><span class="ic">&#128694;</span><h4>只在测这条旅程时才走完每一步</h4><p>测页面 A 之前必须先经过 B、C、D、E、F？测试会又长又复杂。如果那些步骤不属于被测旅程，就用 Web 服务跳过它们；如果属于，就老老实实走一遍。</p></div>
+  <div class="card"><span class="ic">&#128269;</span><h4>断言使用来自页面对象的数据</h4><p>测试需要页面信息来断言时，由页面对象提供（如 <code>all()</code>）。测试方法<strong>不应自己去定位 HTML 元素</strong>，但断言留在测试代码里。</p></div>
+  <div class="card"><span class="ic">&#9881;</span><h4>把重要配置传给测试集</h4><p>应用地址、用哪个浏览器不应写死：CI 可能在别的端口运行应用，你可能想在 Chrome 上跑。作者的做法：在页面对象基类里提供 <code>baseUrl()</code>、<code>browser()</code> 方法，从配置文件或环境变量读取。</p></div>
+  <div class="card"><span class="ic">&#127760;</span><h4>在多个浏览器上运行</h4><p>作者不在自己电脑上做（太费时间），而是让 CI 分多个阶段，每次换一个浏览器跑一遍 Web 测试集。配置 CI 太麻烦？可以用 SauceLabs 这类服务。Playwright 的 <code>projects</code> 配置也能一次跑 Chromium、Firefox、WebKit。</p></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="用测试专用 API 准备数据（示意）"><pre>
+@Test
+void findOwnersBasedOnTheirLastNames() {
+  AddOwnerInfo owner1 = new AddOwnerInfo("John", "Doe", "some address", "some city", "11111");
+  AddOwnerInfo owner2 = new AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111");
+  AddOwnerInfo owner3 = new AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111");
+
+  OwnersAPI api = new OwnersAPI();      // 封装了调用 Web 服务的全部复杂性
+  api.add(owner1);                      // 不再需要访问「添加主人」页面
+  api.add(owner2);
+  api.add(owner3);
+
+  page.visit();
+  ListOfOwnersPage listPage = page.findOwners("Doe");
+  assertThat(listPage.all()).hasSize(2)
+      .containsExactlyInAnyOrder(owner1.toOwnerInfo(), owner2.toOwnerInfo());
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="用测试专用 API 准备数据（示意）"><pre>
+@pytest.fixture(autouse=True)
+def clean_app(request):                 # 每个测试前重置应用（只在测试环境存在的后门）
+    requests.post(f"{BASE_URL}/test-support/reset")
+
+def test_find_owners_based_on_their_last_names(page: Page):
+    api = OwnersAPI(BASE_URL)           # 封装了调用 Web 服务的全部复杂性
+    api.add(AddOwnerInfo("John", "Doe", "some address", "some city", "11111"))
+    api.add(AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111"))
+    api.add(AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111"))
+
+    find_page = FindOwnersPage(page)
+    find_page.visit()
+    assert len(find_page.find_owners("Doe").all()) == 2
+</pre></div>
+<div class="code" data-lang="ts" data-file="用测试专用 API 准备数据（示意）"><pre>
+test.beforeEach(async ({ request }) =&gt; {      // 每个测试前重置应用（只在测试环境存在的后门）
+  await request.post("/test-support/reset");
+});
+
+test("find owners based on their last names", async ({ page, request }) =&gt; {
+  const api = new OwnersAPI(request);         // 封装了调用 Web 服务的全部复杂性
+  await api.add(new AddOwnerInfo("John", "Doe", "some address", "some city", "11111"));
+  await api.add(new AddOwnerInfo("Jane", "Doe", "some address", "some city", "11111"));
+  await api.add(new AddOwnerInfo("Sally", "Smith", "some address", "some city", "11111"));
+
+  const findPage = new FindOwnersPage(page);
+  await findPage.visit();
+  expect(await (await findPage.findOwners("Doe")).all()).toHaveLength(2);
+});
+</pre></div>
+</div>
+
+<div class="code" data-lang="xml" data-file="给测试一个稳定的定位属性"><pre>
+&lt;!-- id 是动态生成的，不稳定；加一个专门给测试用的属性 --&gt;
+&lt;input type="text"
+       id="customer_${i}"
+       name="customer"
+       data-selenium="customer-name" /&gt;
+</pre></div>
+
+<h2 id="final">关于大测试的最后几点</h2>
+
+<h3>各种测试技术如何配合？</h3>
+<p>
+  前几章讲的是如何系统地设计用例，这一章讨论的是一个正交的问题：测试该多大？不论层级如何，<strong>设计好的测试用例</strong>依然是重点 ——
+  写大测试时，照样用需求和边界、代码结构、应满足的属性来设计用例。难点在于：整个组件的需求和代码都大得多，要设计的测试也多得多。
+  作者的经验法则：<strong>在单元层面检验一切</strong>（在那里你能轻松覆盖整个需求和结构），<strong>在大测试里检验最重要的行为</strong>（让你更有信心拼在一起也能工作）。可以重读第 1 章的测试金字塔。
+</p>
+
+<h3>做成本收益分析</h3>
+<p>好测试写起来便宜，却能抓住重要的 Bug。单元测试便宜，不必多想；大测试写、跑、维护都可能不便宜 —— 作者见过要跑好几个小时的集成测试集，也见过开发者花好几个小时写一个集成测试。问问自己：</p>
+<ul>
+  <li>写这个测试要花多少？跑它要花多少？</li>
+  <li>它的收益是什么？能抓住什么 Bug？</li>
+  <li>这个功能已经被单元测试覆盖了吗？如果是，还需要集成测试再覆盖一遍吗？</li>
+</ul>
+<p>很多时候答案是「值得写」。成本太高就考虑简化：能 Stub 掉一部分而不损失太多吗？能写一个只检验系统一小部分的、更聚焦的测试吗？没有唯一的答案或金科玉律。</p>
+
+<h3>小心「被覆盖但没被测试」的方法</h3>
+<p>
+  大测试同时运行更多的类和方法，一个方法被覆盖却没被真正测试的可能性也高得多。Vera-Pérez 等人（2019）称之为<strong>伪测试方法（pseudo-tested methods）</strong>：
+  把方法的整个实现替换成简单的 <code>return null</code>，测试照样通过。信不信由你，它们在真实世界里存在，甚至出现在重要的开源项目中。这是作者主张单元测试和大测试<strong>一起用</strong>的又一个理由。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 140" role="img" aria-label="伪测试方法：被大测试执行到了，但把实现换成 return null 测试依然通过">
+  <rect class="bx-a" x="20" y="30" width="220" height="80" rx="12"/>
+  <text class="ttl on-a" x="130" y="58" text-anchor="middle">大测试</text>
+  <text class="sm" x="130" y="80" text-anchor="middle">只断言最终结果</text>
+  <path class="ln" d="M242 70 H300" marker-end="url(#ar)"/>
+  <rect class="bx" x="304" y="20" width="150" height="40" rx="8"/><text class="lbl" x="379" y="45" text-anchor="middle">A.compute()</text>
+  <rect class="bx-r" x="304" y="80" width="150" height="40" rx="8"/><text class="lbl on-r" x="379" y="98" text-anchor="middle">B.log()</text><text class="sm on-r" x="379" y="113" text-anchor="middle">→ return null 也没人发现</text>
+  <path class="ln" d="M456 40 H520"/><path class="ln" d="M456 100 H520"/>
+  <rect class="bx" x="524" y="30" width="216" height="80" rx="12"/>
+  <text class="lbl" x="632" y="62" text-anchor="middle">覆盖率报告：B 被覆盖 ✔</text>
+  <text class="lbl on-r" x="632" y="86" text-anchor="middle">实际上：B 没被测试 ✘</text>
+</svg>
+<figcaption>图 9-10　伪测试方法：执行到了 ≠ 检验过了（第 3 章的变异测试能揪出它们）</figcaption>
+</figure>
+
+<h3>合适的代码基础设施是关键</h3>
+<p>集成测试和系统测试都需要背后有像样的基础设施，否则要花太多时间搭环境、断言行为。核心建议：<strong>投资测试基础设施</strong>。它应该帮开发者搭建环境、清理环境、获取复杂数据、断言复杂数据，以及完成写测试所需的其他复杂任务。</p>
+
+<h3>给利益相关者用的 DSL 和工具</h3>
+<p>这一章我们用大量代码亲手写系统测试。在这个层级，更自动化的方式也很常见：Robot Framework、Cucumber 等工具甚至允许用接近自然语言的方式写测试。如果你希望（非技术的）利益相关者也能写测试，它们很有意义。</p>
+
+<h3>测试其他类型的系统</h3>
+<p>
+  测试层级越高，越要考虑应用所在的框架和环境：响应式页面怎么测？Angular、React 应用怎么测？MongoDB 这类非关系数据库怎么测？这些已远超本书范围，建议去相应社区了解最前沿的工具和知识。
+  书中的用例设计技术，无论技术栈如何都适用。系统测试的思想也适用于任何软件：库或框架的系统测试像客户一样使用整个库；移动应用的系统测试像用户一样使用整个 App。
+</p>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>开发者受益于编写更大的测试：从整体测试组件，到与外部系统集成，再到整个系统。</li>
+  <li>设计大测试比写单元测试更具挑战，因为被测组件可能比单个单元大得多、复杂得多。</li>
+  <li>我们讨论过的所有用例设计技术 —— 规格测试、边界测试、结构化测试、属性测试 —— 都适用于大测试。</li>
+  <li>为大测试投资良好的测试基础设施是必需的。没有它，你会在写单个测试用例上花太多时间。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>9.1　要让 Web 应用保持可测试，应该遵循哪些建议？（多选：A 用 TypeScript 代替 JavaScript　B 确保测试能轻松找到 HTML 元素　C 确保对服务器的请求是异步的　D 避免在 HTML 页面中内联 JavaScript）</summary>
+<p><strong>B 和 D。</strong></p></details>
+
+<details class="quiz"><summary>9.2　关于端到端/系统测试，哪项正确？（A 无法为 Web 应用自动化，只能手动　B Web 测试中端到端测试比单元测试更重要　C 可以用来验证前端和后端能否良好协作　D 和单元测试一样，不太真实）</summary>
+<p><strong>C。</strong></p></details>
+
+<details class="quiz"><summary>9.3　关于页面对象，哪项正确？（A 抽象 HTML 页面，便于设计端到端测试　B 无法用于非常复杂的 Web 应用　C 引入页面对象后就不再需要 Selenium 这类库　D 通常让测试代码更复杂）</summary>
+<p><strong>A。</strong></p></details>
+
+<details class="quiz"><summary>9.4　对编写集成和系统测试集的开发者，哪些是重要建议？（多选：A 能用单元测试测的就用单元测试，集成和系统测试只用于只能在那个层级发现的 Bug　B 开发者必须有扎实的基础设施来写这类测试　C 已经被单元测试覆盖的，就不该再用集成测试覆盖　D 集成测试太多说明应用设计不好，应专注于单元测试）</summary>
+<p><strong>A 和 B。</strong>C 错：有时你就是想让单元测试和集成测试覆盖同一段代码，它们抓的是不同的 Bug。D 也错：有些类型的应用从集成测试中获益更多，就应该多用；不过，在单元测试是最佳选择时却写不了单元测试，可能说明更深层的设计问题。</p></details>
+
+<details class="quiz"><summary>9.5　哪些会导致 Web 测试不稳定（有时过有时不过）？（多选：A AJAX 请求比预期的慢　B 用 LESS 和 SASS 代替纯 CSS　C 被测 Web 应用的数据库在每次测试后没有清理　D 应用的某些组件当时不可用）</summary>
+<p><strong>A、C 和 D。</strong></p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch9</code> 目录跑 <code>mvn test</code>（Web 测试需要 PetClinic 在运行，且书中用的是 Safari；没有 Safari 的话，换成 <code>ChromeDriver</code> 或直接用上面的 Playwright 版本）。</li>
+    <li>书中留的练习：为 <code>FinalPriceCalculator</code> 组合分区、设计完整的大测试（参考上面的四个类别）。</li>
+    <li>为 <code>InvoiceDao</code> 新增一个方法 <code>allBetween(min, max)</code>（<code>where value &gt; ? and value &lt; ?</code>），用条件 + 分支覆盖设计 SQL 测试，别忘了 NULL。</li>
+    <li>为 PetClinic 的另一条旅程写 Web 测试：给一位主人添加宠物。你需要新的页面对象。然后把「数据库没被清空导致第二次运行失败」的问题解决掉。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

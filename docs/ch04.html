@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 4 章 · 契约式设计 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="4">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 4 章</span>
+<h1>契约式设计</h1>
+<p class="lede">
+  类和类之间互相调用，就像签合同：调用方保证传进来的东西合规，被调用方保证交出去的东西靠谱。
+  把这份「合同」—— 前置条件、后置条件、不变式 —— 明明白白写进代码里，Bug 就会在第一时间、在离根源最近的地方暴露出来。
+  这一章讲怎么设计契约、怎么改契约不翻车，以及契约和输入校验到底有什么区别。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>为方法设计前置条件和后置条件，为类设计不变式</li>
+    <li>理解强契约与弱契约的取舍</li>
+    <li>判断修改契约是否会破坏调用方，理解里氏替换原则</li>
+    <li>分清<strong>输入校验</strong>和<strong>契约</strong>，知道断言和异常各该用在哪</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="why">三种应对「非法输入」的方式</h2>
+
+<p>
+  想象一个处理复杂金融流程的系统：一长串类依次调用，前一个的结果传给下一个。数据来自数据库、外部服务和用户。
+  流程中某处会调用 <code>TaxCalculator</code>，而根据需求，<strong>税款计算只对正数有意义</strong>。这个限制该怎么建模？
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="应对非法输入的三种方式：调用方保证、处处防御、明确契约">
+  <rect class="bx" x="14" y="14" width="236" height="200" rx="12"/>
+  <text class="ttl" x="132" y="40" text-anchor="middle">① 调用方保证</text>
+  <rect class="bx-b" x="34" y="56" width="80" height="34" rx="6"/><text class="sm on-b" x="74" y="77" text-anchor="middle">调用方 ✔</text>
+  <rect class="bx-b" x="34" y="98" width="80" height="34" rx="6"/><text class="sm on-b" x="74" y="119" text-anchor="middle">调用方 ✔</text>
+  <path class="ln" d="M116 73 L150 100" marker-end="url(#ar)"/>
+  <path class="ln" d="M116 115 L150 108" marker-end="url(#ar)"/>
+  <rect class="bx" x="154" y="88" width="80" height="34" rx="6"/><text class="sm" x="194" y="109" text-anchor="middle">Tax…</text>
+  <text class="sm" x="30" y="160">被调用方很简单，</text>
+  <text class="sm" x="30" y="176">但每个调用方都得记住</text>
+  <text class="sm" x="30" y="192">「不许传负数」</text>
+
+  <rect class="bx" x="262" y="14" width="236" height="200" rx="12"/>
+  <text class="ttl" x="380" y="40" text-anchor="middle">② 处处防御</text>
+  <rect class="bx-r" x="282" y="56" width="60" height="30" rx="6"/><text class="sm on-r" x="312" y="75" text-anchor="middle">检查</text>
+  <rect class="bx-r" x="350" y="56" width="60" height="30" rx="6"/><text class="sm on-r" x="380" y="75" text-anchor="middle">检查</text>
+  <rect class="bx-r" x="418" y="56" width="60" height="30" rx="6"/><text class="sm on-r" x="448" y="75" text-anchor="middle">检查</text>
+  <rect class="bx-r" x="316" y="96" width="60" height="30" rx="6"/><text class="sm on-r" x="346" y="115" text-anchor="middle">检查</text>
+  <rect class="bx-r" x="384" y="96" width="60" height="30" rx="6"/><text class="sm on-r" x="414" y="115" text-anchor="middle">检查</text>
+  <text class="sm" x="278" y="160">系统更健壮，但每个类都变复杂，</text>
+  <text class="sm" x="278" y="176">临时起意地防御还会产生大量</text>
+  <text class="sm" x="278" y="192">重复检查</text>
+
+  <rect class="bx-a" x="510" y="14" width="236" height="200" rx="12"/>
+  <text class="ttl on-a" x="628" y="40" text-anchor="middle">③ 明确契约（本章）</text>
+  <rect class="bx" x="530" y="56" width="196" height="84" rx="8"/>
+  <text class="sm" x="544" y="78">需要（前置条件）：value ≥ 0</text>
+  <text class="sm" x="544" y="100">保证（后置条件）：返回 ≥ 0</text>
+  <text class="sm" x="544" y="122">始终成立（不变式）：……</text>
+  <text class="sm" x="526" y="160">每个类都声明自己需要什么、</text>
+  <text class="sm" x="526" y="176">承诺什么。灵感来自 Bertrand</text>
+  <text class="sm" x="526" y="192">Meyer 的「契约式设计」</text>
+</svg>
+<figcaption>图 4-1　面对「只接受正数」这个限制的三种建模方式</figcaption>
+</figure>
+
+<p>
+  契约是在<strong>写代码的时候</strong>就要思考的，所以在第 1 章的流程图里，契约式设计位于左边「用测试引导开发」那一侧，而不是右边的「测试找 Bug」。
+</p>
+
+<h2 id="pre-post">前置条件与后置条件</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="前置条件是调用方的义务，后置条件是被调用方的承诺">
+  <rect class="bx-b" x="20" y="50" width="160" height="70" rx="12"/>
+  <text class="ttl on-b" x="100" y="80" text-anchor="middle">调用方（客户）</text>
+  <text class="sm" x="100" y="100" text-anchor="middle">calculateTax(50)</text>
+  <path class="ln-b" d="M182 72 H566" marker-end="url(#ar-b)"/>
+  <text class="lbl on-b" x="374" y="62" text-anchor="middle">前置条件：调用方的义务 —— 我保证 value ≥ 0</text>
+  <path class="ln-g" d="M566 100 H182" marker-end="url(#ar-g)"/>
+  <text class="lbl on-g" x="374" y="120" text-anchor="middle">后置条件：被调用方的承诺 —— 我保证返回值 ≥ 0</text>
+  <rect class="bx-a" x="570" y="50" width="170" height="70" rx="12"/>
+  <text class="ttl on-a" x="655" y="80" text-anchor="middle">TaxCalculator</text>
+  <text class="sm" x="655" y="100" text-anchor="middle">（服务方）</text>
+  <text class="sm" x="380" y="158" text-anchor="middle">调用方守约，服务方就必须兑现；调用方不必再检查返回值是不是负数，代码更简单</text>
+</svg>
+<figcaption>图 4-2　契约的两端：调用前谁负责什么，调用后谁保证什么</figcaption>
+</figure>
+
+<p>对 TaxCalculator：前置条件是「不接受负数」，一个合理的后置条件是「也不返回负数」。把它们写进代码，最简单的方式就是 if：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch4/TaxCalculator.java"><pre>
+public class TaxCalculator {
+
+  /**
+   * 按照（某某规则）计算税款。
+   *
+   * @param value 计税基数。必须是正数。
+   * @return 计算出的税款。永远是正数。
+   */
+  public double calculateTax(double value) {
+    // 前置条件
+    if (value &lt; 0) {
+      throw new RuntimeException("Value has to be positive");
+    }
+
+    double taxValue = 0;
+    // 这里是一些复杂的业务规则……
+    // 最终结果放进 taxValue
+
+    // 后置条件
+    if (taxValue &lt; 0) {
+      throw new RuntimeException("Calculated tax cannot be negative");
+    }
+    return taxValue;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="tax_calculator.py"><pre>
+class TaxCalculator:
+
+    def calculate_tax(self, value: float) -&gt; float:
+        """按照（某某规则）计算税款。
+
+        :param value: 计税基数。必须是正数。
+        :return: 计算出的税款。永远是正数。
+        """
+        # 前置条件
+        if value &lt; 0:
+            raise ValueError("value has to be positive")
+
+        tax_value = 0.0
+        # 这里是一些复杂的业务规则……
+        # 最终结果放进 tax_value
+
+        # 后置条件
+        if tax_value &lt; 0:
+            raise ArithmeticError("calculated tax cannot be negative")
+        return tax_value
+</pre></div>
+<div class="code" data-lang="ts" data-file="taxCalculator.ts"><pre>
+export class TaxCalculator {
+  /**
+   * 按照（某某规则）计算税款。
+   *
+   * @param value 计税基数。必须是正数。
+   * @returns 计算出的税款。永远是正数。
+   */
+  calculateTax(value: number): number {
+    // 前置条件
+    if (value &lt; 0) {
+      throw new RangeError("value has to be positive");
+    }
+
+    let taxValue = 0;
+    // 这里是一些复杂的业务规则……
+    // 最终结果放进 taxValue
+
+    // 后置条件
+    if (taxValue &lt; 0) {
+      throw new Error("calculated tax cannot be negative");
+    }
+    return taxValue;
+  }
+}
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 后置条件是我自己实现的，怎么会违反？</div>
+  <p>
+    你当然希望实现永远不返回负数。但在复杂的实现里，Bug 总会溜进来 —— 如果 Bug 不存在，这本书也就没必要写了。
+    后置条件检查保证：<strong>一旦实现有 Bug，方法会抛异常，而不是悄悄返回一个错误的值</strong>。程序停下来，往往比带着错误值继续跑要好得多。
+    另外，别忘了把契约写进文档注释（上面的 Javadoc / docstring / JSDoc）。
+  </p>
+</div>
+
+<h3>用断言表达契约</h3>
+
+<p>很多语言提供了原生的断言机制。用断言改写上面的方法：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="TaxCalculator（assert 版）"><pre>
+public double calculateTax(double value) {
+  assert value &gt;= 0 : "Value cannot be negative";        // 前置条件
+
+  double taxValue = 0;
+  // 这里是一些复杂的业务规则……
+
+  assert taxValue &gt;= 0 : "Calculated tax value cannot be negative.";   // 后置条件
+  return taxValue;
+}
+// 注意：Java 的 assert 默认是关闭的，要用 java -ea（enable assertions）启动才会检查
+</pre></div>
+<div class="code" data-lang="python" data-file="tax_calculator.py（assert 版）"><pre>
+def calculate_tax(self, value: float) -&gt; float:
+    assert value &gt;= 0, "value cannot be negative"          # 前置条件
+
+    tax_value = 0.0
+    # 这里是一些复杂的业务规则……
+
+    assert tax_value &gt;= 0, "calculated tax cannot be negative"   # 后置条件
+    return tax_value
+# 注意：Python 的 assert 默认开启，但用 python -O 运行时会被整体移除
+</pre></div>
+<div class="code" data-lang="ts" data-file="taxCalculator.ts（断言版）"><pre>
+// TS/JS 没有 assert 关键字。可以用 node:assert，或者自己写一个断言函数。
+// "asserts cond" 是 TypeScript 的断言签名：调用之后，编译器会认为 cond 为真。
+export function invariant(cond: unknown, msg: string): asserts cond {
+  if (!cond) throw new Error(`Contract violated: ${msg}`);
+}
+
+calculateTax(value: number): number {
+  invariant(value &gt;= 0, "value cannot be negative");            // 前置条件
+
+  let taxValue = 0;
+  // 这里是一些复杂的业务规则……
+
+  invariant(taxValue &gt;= 0, "calculated tax cannot be negative"); // 后置条件
+  return taxValue;
+}
+// 注意：自己写的断言永远会执行，没有「关掉」的开关（除非构建时专门剥离）
+</pre></div>
+</div>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>断言（assert）</th><th>if + 抛异常</th></tr>
+  <tr><td>能被关掉吗</td><td>Java 默认关，需 <code>-ea</code>；Python 用 <code>-O</code> 会移除</td><td>永远执行</td></tr>
+  <tr><td>抛出什么</td><td>通用的 <code>AssertionError</code></td><td>可以抛更具体、调用方能处理的异常</td></tr>
+  <tr><td>适合</td><td>你能完全控制运行环境、数据已被清洗过的内部代码</td><td>库、工具类，或者不确定生产环境是否开启断言时</td></tr>
+</table>
+</div>
+
+<p>用哪个需要团队讨论（后面 <a href="#assert-vs-exception">「断言还是异常」</a>一节有作者的经验法则）。本章剩下的部分为了简洁使用断言。</p>
+
+<h3>强契约与弱契约</h3>
+
+<p>
+  设计契约时的一个重要决定是：条件要多强？上面我们对负数的处理很<strong>强</strong>：负数进来就违反前置条件，程序停止。
+  另一种选择是<strong>削弱</strong>前置条件 —— 接受任何值，由方法自己想办法处理负数：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="强前置条件与弱前置条件的对比">
+  <text class="ttl" x="20" y="24">强前置条件：只接受 [0, +∞)</text>
+  <path class="ln" d="M40 60 H720"/>
+  <path class="ln-g" d="M380 60 H720" style="stroke-width:8"/>
+  <path class="ln-r" d="M40 60 H378" style="stroke-width:8;stroke-dasharray:4 4"/>
+  <text class="sm on-r" x="200" y="84" text-anchor="middle">负数 → 违反契约，程序停止</text>
+  <text class="sm on-g" x="550" y="84" text-anchor="middle">正常处理</text>
+  <text class="mono" x="380" y="48" text-anchor="middle">0</text>
+
+  <text class="ttl" x="20" y="118">弱前置条件：接受 (-∞, +∞)</text>
+  <path class="ln-g" d="M40 146 H720" style="stroke-width:8"/>
+  <text class="sm on-g" x="380" y="166" text-anchor="middle">任何值都能调用，方法内部要自己处理负数 —— 调用方轻松，方法更复杂</text>
+</svg>
+<figcaption>图 4-3　强契约把负担放在调用方，弱契约把负担放在方法自己身上</figcaption>
+</figure>
+
+<p>
+  弱前置条件让别的类更容易调用这个方法。没有标准答案，取决于你在开发什么系统、对调用方有什么期望。
+  作者偏爱<strong>更强</strong>的条件，因为它们缩小了可能出错的范围 —— 代价是要花更多时间把条件写成断言，代码更复杂。
+</p>
+<p>
+  后置条件也能削弱吗？作者说他想不起来自己这么做过哪怕一次。对税款来说，负数意味着实现有 Bug，你肯定不希望有人因此少交税。
+</p>
+
+<p>有时候前置条件<strong>不能</strong>削弱（税款就是不能算负数），但又不想让程序停下来。务实的做法是返回一个<strong>错误值</strong>：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="返回错误码而不是抛异常"><pre>
+public double calculateTax(double value) {
+  if (value &lt; 0) {
+    return 0;       // 调用方不用处理异常了，但它得知道「0 可能意味着输入非法」
+  }
+  // ……
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="返回错误码而不是抛异常"><pre>
+def calculate_tax(self, value: float) -&gt; float:
+    if value &lt; 0:
+        return 0.0  # 调用方不用处理异常了，但它得知道「0 可能意味着输入非法」
+    # ……
+</pre></div>
+<div class="code" data-lang="ts" data-file="返回错误码而不是抛异常"><pre>
+calculateTax(value: number): number {
+  if (value &lt; 0) {
+    return 0;       // 调用方不用处理异常了，但它得知道「0 可能意味着输入非法」
+  }
+  // ……
+}
+</pre></div>
+</div>
+
+<p>调用方现在必须知道：收到 0 可能是因为输入非法。也许返回 -1 更好，能和「税款恰好为 0」区分开。这又是一个需要权衡的决定。</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 和经典理论的区别</div>
+  <p>
+    熟悉 Meyer 1992 年原始契约式设计理论的读者请注意：这里返回错误码<em>并不是</em>削弱前置条件，而是选择用错误码代替异常。
+    作者对契约的理解比原始论文更务实：重要的是<strong>认真思考类和方法能处理什么、不能处理什么，以及违反时该怎么办</strong>。
+  </p>
+</div>
+
+<h2 id="invariants">不变式</h2>
+
+<p>
+  前置条件在方法执行<em>前</em>成立，后置条件在方法执行<em>后</em>成立。还有一类条件，在方法执行前后<strong>都</strong>必须成立 —— 这叫<strong>不变式（invariant）</strong>：
+  在对象整个生命周期中始终为真的条件。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="不变式在每个公有方法调用前后都成立，方法执行过程中可以暂时不成立">
+  <text class="ttl" x="20" y="24">Basket 对象的一生：不变式「totalValue ≥ 0」</text>
+  <path class="ln" d="M30 110 H740" marker-end="url(#ar)"/>
+  <text class="sm" x="700" y="130">时间</text>
+
+  <circle class="bx-g" cx="60" cy="110" r="10"/>
+  <text class="sm on-g" x="60" y="140" text-anchor="middle">创建 ✔</text>
+
+  <rect class="bx-b" x="120" y="86" width="160" height="48" rx="8"/>
+  <text class="ttl on-b" x="200" y="108" text-anchor="middle">add(TV, 2)</text>
+  <text class="sm" x="200" y="125" text-anchor="middle">执行中可以暂时不成立</text>
+  <circle class="bx-g" cx="110" cy="70" r="8"/><text class="sm on-g" x="110" y="56" text-anchor="middle">✔</text>
+  <circle class="bx-g" cx="290" cy="70" r="8"/><text class="sm on-g" x="290" y="56" text-anchor="middle">✔</text>
+
+  <rect class="bx-b" x="340" y="86" width="160" height="48" rx="8"/>
+  <text class="ttl on-b" x="420" y="108" text-anchor="middle">add(Soda, 5)</text>
+  <text class="sm" x="420" y="125" text-anchor="middle">执行中可以暂时不成立</text>
+  <circle class="bx-g" cx="510" cy="70" r="8"/><text class="sm on-g" x="510" y="56" text-anchor="middle">✔</text>
+
+  <rect class="bx-b" x="560" y="86" width="130" height="48" rx="8"/>
+  <text class="ttl on-b" x="625" y="108" text-anchor="middle">remove(TV)</text>
+  <text class="sm" x="625" y="125" text-anchor="middle">……</text>
+  <circle class="bx-g" cx="700" cy="70" r="8"/><text class="sm on-g" x="700" y="56" text-anchor="middle">✔</text>
+
+  <text class="lbl" x="380" y="176" text-anchor="middle">每个公有方法结束时检查一次（✔）：不管调用了多少次 add/remove、顺序如何，总价永远不能为负</text>
+</svg>
+<figcaption>图 4-4　不变式：在每次公有方法调用的前后都成立</figcaption>
+</figure>
+
+<p>来看一个购物车 <code>Basket</code>：<code>add(product, qty)</code> 加入商品，<code>remove(product)</code> 把某商品整个移除。先设计每个方法的前后置条件：</p>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><th>前置条件</th><th>后置条件</th></tr>
+  <tr><td><code>add</code></td><td>product 不为 null；qty &gt; 0</td><td>商品已在购物车中；新总价 &gt; 旧总价</td></tr>
+  <tr><td><code>remove</code></td><td>product 不为 null；商品必须已在购物车中</td><td>商品不再在购物车中</td></tr>
+  <tr><td colspan="3"><strong>不变式：</strong>totalValue ≥ 0 —— 它既不是前置也不是后置条件，而是整个类负责维护的承诺</td></tr>
+</table>
+</div>
+
+<p>下面是完整实现（本仓库 <code>ch5/Basket.java</code>，下一章会用属性测试狠狠地测它）：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch5/Basket.java"><pre>
+public class Basket {
+  // 用 BigDecimal 而不是 double，避免浮点舍入误差
+  private BigDecimal totalValue = BigDecimal.ZERO;
+  private Map&lt;Product, Integer&gt; basket = new HashMap&lt;&gt;();
+
+  public void add(Product product, int qtyToAdd) {
+    assert product != null : "Product is required";                  // 前置
+    assert qtyToAdd &gt; 0 : "Quantity has to be greater than zero";    // 前置
+    BigDecimal oldTotalValue = totalValue;       // 为后置条件保存旧值
+
+    int existingQuantity = basket.getOrDefault(product, 0);
+    int newQuantity = existingQuantity + qtyToAdd;
+    basket.put(product, newQuantity);
+
+    BigDecimal valueAlreadyInTheCart = product.getPrice().multiply(valueOf(existingQuantity));
+    BigDecimal newFinalValueForTheProduct = product.getPrice().multiply(valueOf(newQuantity));
+    totalValue = totalValue
+        .subtract(valueAlreadyInTheCart)
+        .add(newFinalValueForTheProduct);
+
+    assert basket.containsKey(product) : "Product was not inserted in the basket";   // 后置
+    assert totalValue.compareTo(oldTotalValue) == 1 :
+        "Total value should be greater than previous total value";                  // 后置
+    assert invariant() : "Invariant does not hold";                                  // 不变式
+  }
+
+  public void remove(Product product) {
+    assert product != null : "product can't be null";                          // 前置
+    assert basket.containsKey(product) : "Product must already be in the basket";  // 前置
+
+    int qty = basket.get(product);
+    totalValue = totalValue.subtract(product.getPrice().multiply(valueOf(qty)));
+    basket.remove(product);
+
+    assert !basket.containsKey(product) : "Product is still in the basket";    // 后置
+    assert invariant() : "Invariant does not hold";                            // 不变式
+  }
+
+  // 把不变式抽成一个方法，每个公有方法结尾都调用它
+  private boolean invariant() {
+    return totalValue.compareTo(BigDecimal.ZERO) &gt;= 0;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="basket.py"><pre>
+from dataclasses import dataclass
+from decimal import Decimal
+
+@dataclass(frozen=True)          # frozen → 可哈希，能当 dict 的 key
+class Product:
+    name: str
+    price: Decimal               # 用 Decimal 而不是 float，避免浮点舍入误差
+
+class Basket:
+    def __init__(self):
+        self.total_value = Decimal("0")
+        self._basket: dict[Product, int] = {}
+
+    def add(self, product: Product, qty_to_add: int) -&gt; None:
+        assert product is not None, "product is required"                 # 前置
+        assert qty_to_add &gt; 0, "quantity has to be greater than zero"     # 前置
+        old_total_value = self.total_value     # 为后置条件保存旧值
+
+        existing = self._basket.get(product, 0)
+        new_qty = existing + qty_to_add
+        self._basket[product] = new_qty
+        self.total_value = (self.total_value
+                            - product.price * existing
+                            + product.price * new_qty)
+
+        assert product in self._basket, "product was not inserted"         # 后置
+        assert self.total_value &gt; old_total_value, "total should grow"     # 后置
+        assert self._invariant(), "invariant does not hold"                # 不变式
+
+    def remove(self, product: Product) -&gt; None:
+        assert product is not None, "product can't be None"                # 前置
+        assert product in self._basket, "product must be in the basket"    # 前置
+
+        qty = self._basket.pop(product)
+        self.total_value -= product.price * qty
+
+        assert product not in self._basket, "product is still in the basket"  # 后置
+        assert self._invariant(), "invariant does not hold"                   # 不变式
+
+    def _invariant(self) -&gt; bool:
+        return self.total_value &gt;= 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="basket.ts"><pre>
+import { invariant } from "./contracts";
+
+export interface Product {
+  name: string;
+  priceInCents: number;   // JS 没有内置十进制类型：用「分」做整数，避免浮点误差
+}
+
+export class Basket {
+  totalValueInCents = 0;
+  // 注意：JS 的 Map 按「引用」比较对象键，不像 Java 那样用 equals/hashCode。
+  // 所以这里用商品名做键。
+  private items = new Map&lt;string, { product: Product; qty: number }&gt;();
+
+  add(product: Product, qtyToAdd: number): void {
+    invariant(product != null, "product is required");                  // 前置
+    invariant(qtyToAdd &gt; 0, "quantity has to be greater than zero");    // 前置
+    const oldTotal = this.totalValueInCents;   // 为后置条件保存旧值
+
+    const existing = this.items.get(product.name)?.qty ?? 0;
+    const newQty = existing + qtyToAdd;
+    this.items.set(product.name, { product, qty: newQty });
+    this.totalValueInCents += product.priceInCents * (newQty - existing);
+
+    invariant(this.items.has(product.name), "product was not inserted");  // 后置
+    invariant(this.totalValueInCents &gt; oldTotal, "total should grow");    // 后置
+    invariant(this.holds(), "invariant does not hold");                   // 不变式
+  }
+
+  remove(product: Product): void {
+    invariant(product != null, "product can't be null");                  // 前置
+    const entry = this.items.get(product.name);
+    invariant(entry, "product must already be in the basket");             // 前置
+
+    this.totalValueInCents -= entry.product.priceInCents * entry.qty;
+    this.items.delete(product.name);
+
+    invariant(!this.items.has(product.name), "product is still in the basket");  // 后置
+    invariant(this.holds(), "invariant does not hold");                          // 不变式
+  }
+
+  private holds(): boolean {
+    return this.totalValueInCents &gt;= 0;
+  }
+}
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 几个细节</div>
+  <ul>
+    <li><strong>保存旧值：</strong>「新总价 &gt; 旧总价」这种后置条件需要额外变量保存旧值。Eiffel 这类语言原生提供 <code>old</code> 关键字，不需要额外变量。</li>
+    <li><strong>钱不要用浮点数：</strong>Java 用 <code>BigDecimal</code>（代价是比较要写 <code>compareTo</code>），Python 用 <code>Decimal</code>，JS/TS 常用「分」为单位的整数。</li>
+    <li><strong>不变式可以暂时被打破：</strong>方法执行到一半时，作为算法的一部分，不变式可能短暂不成立；但方法结束时必须恢复。</li>
+    <li><strong>这个类怎么测？</strong>add 和 remove 可以以任意顺序、任意次数组合调用，不可能穷举。答案在第 5 章：属性测试。</li>
+  </ul>
+</div>
+
+<h2 id="changing">修改契约与里氏替换原则</h2>
+
+<p>
+  理想情况下，契约定义好就不再改。现实中，我们有时不得不改。改变可能无法避免，但我们可以<strong>理解它的影响</strong>。
+  最好的方法不是盯着被改的类，而是看<strong>所有使用它的类</strong>：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="calculateTax 被三个调用方依赖，前置条件从 value 大于等于 0 改为大于等于 100 后的影响">
+  <rect class="bx-a" x="270" y="100" width="220" height="64" rx="12"/>
+  <text class="ttl on-a" x="380" y="126" text-anchor="middle">calculateTax(value)</text>
+  <text class="mono" x="380" y="148" text-anchor="middle">value ≥ 0 → 改成 value ≥ 100</text>
+
+  <rect class="bx" x="20" y="20" width="200" height="70" rx="10"/>
+  <text class="ttl" x="36" y="42">调用方 1</text>
+  <text class="mono" x="36" y="66">calculateTax(50);</text>
+  <text class="lbl on-r" x="36" y="84">✘ 改完后直接崩溃</text>
+
+  <rect class="bx" x="20" y="176" width="200" height="70" rx="10"/>
+  <text class="ttl" x="36" y="198">调用方 2</text>
+  <text class="mono" x="36" y="222">calculateTax(150);</text>
+  <text class="lbl on-g" x="36" y="240">✔ 纯属运气，没事</text>
+
+  <rect class="bx" x="540" y="90" width="200" height="104" rx="10"/>
+  <text class="ttl" x="556" y="112">调用方 3</text>
+  <text class="mono" x="556" y="134">t = getFromDB()</text>
+  <text class="mono" x="556" y="152">ensure t &gt; 0</text>
+  <text class="mono" x="556" y="170">calculateTax(t);</text>
+  <text class="lbl on-r" x="556" y="188">✘ 时好时坏</text>
+
+  <path class="ln" d="M222 60 L270 112" marker-end="url(#ar)"/>
+  <path class="ln" d="M222 210 L270 156" marker-end="url(#ar)"/>
+  <path class="ln" d="M538 142 H494" marker-end="url(#ar)"/>
+  <text class="sm" x="380" y="200" text-anchor="middle">TaxCalculator 并不知道都有谁在用它</text>
+</svg>
+<figcaption>图 4-5　把前置条件改强（接受更少的值），依赖旧契约的调用方就可能出问题</figcaption>
+</figure>
+
+<p>把规律总结成一张表（「强」= 限制更多、值域更小，「弱」= 限制更少、值域更大）：</p>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>改得更强（更严格）</th><th>改得更弱（更宽松）</th></tr>
+  <tr><td><strong>前置条件</strong><br><span class="sm">调用方要满足的</span></td>
+      <td class="bad">✘ 可能破坏调用方<br><span style="font-weight:400">例：value ≥ 0 → value ≥ 100，传 50 的调用方崩溃</span></td>
+      <td class="ok">✔ 安全<br><span style="font-weight:400">例：改成接受负数，旧调用方都没问题</span></td></tr>
+  <tr><td><strong>后置条件</strong><br><span class="sm">方法承诺给出的</span></td>
+      <td class="ok">✔ 安全<br><span style="font-weight:400">例：承诺返回 ≥ 100，旧调用方本来就准备好接受 ≥ 0</span></td>
+      <td class="bad">✘ 可能破坏调用方<br><span style="font-weight:400">例：开始返回负数，调用方没准备好处理</span></td></tr>
+</table>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 一句话记住</div>
+  <p><strong>要求可以放宽，承诺不能打折。</strong>前置条件只能变弱，后置条件只能变强。</p>
+</div>
+
+<h3>继承与契约</h3>
+
+<p>在面向对象语言里，继承让这个问题更隐蔽。TaxCalculator 有几个子类，它们各自重写了 <code>calculateTax()</code>，并以不同方式修改了契约：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="基类 TaxCalculator 与三个子类的契约对比，以及哪些违反了里氏替换原则">
+  <rect class="bx" x="20" y="30" width="130" height="50" rx="10"/>
+  <text class="ttl" x="85" y="60" text-anchor="middle">Client</text>
+  <path class="ln" d="M152 55 H262" marker-end="url(#ar)"/>
+  <text class="sm" x="207" y="46" text-anchor="middle">只认识基类</text>
+  <rect class="bx-a" x="266" y="20" width="260" height="70" rx="10"/>
+  <text class="ttl on-a" x="396" y="44" text-anchor="middle">TaxCalculator（基类）</text>
+  <text class="mono" x="396" y="66" text-anchor="middle">前置 value ≥ 0</text>
+  <text class="mono" x="396" y="82" text-anchor="middle">后置 返回 ≥ 0</text>
+
+  <path class="ln" d="M396 92 V120 H120 V140"/>
+  <path class="ln" d="M396 120 H640 V140"/>
+  <path class="ln" d="M380 120 V140"/>
+
+  <rect class="bx-r" x="20" y="142" width="230" height="130" rx="10"/>
+  <text class="ttl on-r" x="135" y="166" text-anchor="middle">TaxCalculatorBrazil</text>
+  <text class="mono" x="36" y="190">前置 value ≥ 0　　 相同 ✔</text>
+  <text class="mono" x="36" y="210">后置 返回任意数　 变弱 ✘</text>
+  <text class="sm on-r" x="36" y="240">客户端可能收到意料之外的</text>
+  <text class="sm on-r" x="36" y="256">负数 → 违反 LSP</text>
+
+  <rect class="bx-r" x="265" y="142" width="230" height="130" rx="10"/>
+  <text class="ttl on-r" x="380" y="166" text-anchor="middle">TaxCalculatorUS</text>
+  <text class="mono" x="281" y="190">前置 value ≥ 100　变强 ✘</text>
+  <text class="mono" x="281" y="210">后置 返回 ≥ 0　　 相同 ✔</text>
+  <text class="sm on-r" x="281" y="240">客户端传 50 对基类合法，</text>
+  <text class="sm on-r" x="281" y="256">对它却非法 → 违反 LSP</text>
+
+  <rect class="bx-g" x="510" y="142" width="230" height="130" rx="10"/>
+  <text class="ttl on-g" x="625" y="166" text-anchor="middle">TaxCalculatorNL</text>
+  <text class="mono" x="526" y="190">前置 任意值　　　 变弱 ✔</text>
+  <text class="mono" x="526" y="210">后置 返回 ≥ 0　　 相同 ✔</text>
+  <text class="sm on-g" x="526" y="240">能处理客户端的一切输入，</text>
+  <text class="sm on-g" x="526" y="256">不会出问题 ✔</text>
+</svg>
+<figcaption>图 4-6　由于多态，客户端可能在运行时拿到任何一个子类，但它只知道基类的契约</figcaption>
+</figure>
+
+<p>客户端在构造函数里接收一个 TaxCalculator。由于多态，传给它的可能是任何子类，而它只能假设对方遵守<strong>基类</strong>的契约。推广开来，若子类 S 继承基类 B：</p>
+
+<ol class="steps">
+  <li>S 的前置条件应该<strong>等于或弱于</strong> B 的（接受更多的值）。</li>
+  <li>S 的后置条件应该<strong>等于或强于</strong> B 的（返回更少的值）。</li>
+</ol>
+
+<p>
+  「子类可以替换基类而不破坏系统的预期行为」，这就是<strong>里氏替换原则（Liskov Substitution Principle，LSP）</strong>。
+  Barbara Liskov 在 1987 年的主题演讲中提出，后来和 Jeannette Wing 在著名论文《A behavioral notion of subtyping》（1994）中完善。
+  Robert Martin 推广 SOLID 原则后它更加流行 —— SOLID 里的 L 就是 LSP。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 更简单的办法</div>
+  <p>一个众所周知的最佳实践是尽量避免继承（《Effective Java》第 16 条：组合优于继承）。不用继承，自然就没有这些问题。但如果你必须用，现在知道该注意什么了。</p>
+</div>
+
+<h2 id="testing">契约和测试有什么关系？</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128680;</span><h4>更早、更准地发现 Bug</h4><p>契约一被违反，程序就停下，错误信息明确指出是哪个条件。没有断言的话，一个非法值可能在系统里游荡很久，在别处引发怪异行为，很难追到根源。</p></div>
+  <div class="card"><span class="ic">&#128161;</span><h4>告诉你该测什么</h4><p>一看到 <code>qty &gt; 0</code> 这个前置条件，你就知道它值得在单元、集成或系统测试中被检验。契约不取代测试，而是补充测试。</p></div>
+  <div class="card"><span class="ic">&#129309;</span><h4>让调用方更轻松</h4><p>只要调用方满足前置条件，服务方就保证后置条件。承诺只返回正数，调用方就不用再检查返回值是否为负。</p></div>
+  <div class="card"><span class="ic">&#129302;</span><h4>给智能测试当「预言机」</h4><p>模糊测试（fuzzing）等工具会读取代码中明确写出的契约，想方设法去打破它们。推荐阅读 <em>The Fuzzing Book</em>。</p></div>
+</div>
+
+<p>作者并不把契约式设计看作一种测试实践，而是一种<strong>设计技术</strong>。</p>
+
+<h2 id="real-world">现实中的契约式设计</h2>
+
+<h3>弱还是强？</h3>
+<p>
+  弱前置条件（比如接受 null）让方法对调用方很友好，但把处理非法输入的负担放在方法自己身上；强前置条件（只接受正数、不接受 null）则把负担放在调用方身上。
+  没有唯一答案，要结合整体上下文。例如 Apache Commons 的很多方法前置条件都很弱，让 API 用起来很方便 ——<strong>库的开发者通常偏爱弱前置条件</strong>，以简化用户的生活。
+</p>
+
+<h3>输入校验、契约，还是都要？</h3>
+
+<p>输入校验的重要性众所周知：校验出错可能导致安全漏洞。看一个添加商品的 Web 控制器：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="输入校验（伪代码）"><pre>
+class ProductController {
+  public void add(String productName, String productDescription, double price) {
+    // 参数直接来自最终用户，使用前必须校验
+    String sanitizedProductName = sanitize(productName);
+    String sanitizedProductDescription = sanitize(productDescription);
+
+    if (!isValidProductName(sanitizedProductName)) {
+      errorMessages.add("Invalid product name");
+    }
+    if (!isValidProductDescription(sanitizedProductDescription)) {
+      errorMessages.add("Invalid product description");
+    }
+    if (!isValidPriceRange(price)) {
+      errorMessages.add("Invalid price");
+    }
+
+    if (errorMessages.empty()) {      // 全部合法才创建对象
+      Product newProduct = new Product(sanitizedProductName, productDescription, price);
+      database.save(newProduct);
+      redirectTo("productPage", newProduct.getId());
+    } else {                          // 否则回到表单页，显示所有错误
+      redirectTo("addProduct", errorMessages.getErrors());
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="输入校验（伪代码，类 Flask 风格）"><pre>
+def add_product(form):
+    # 参数直接来自最终用户，使用前必须校验
+    name = sanitize(form["name"])
+    description = sanitize(form["description"])
+    price = form.get("price")
+
+    errors = []
+    if not is_valid_product_name(name):
+        errors.append("Invalid product name")
+    if not is_valid_product_description(description):
+        errors.append("Invalid product description")
+    if not is_valid_price_range(price):
+        errors.append("Invalid price")
+
+    if not errors:                    # 全部合法才创建对象
+        product = Product(name, description, price)
+        database.save(product)
+        return redirect_to("product_page", product.id)
+    return redirect_to("add_product", errors=errors)   # 显示所有错误
+</pre></div>
+<div class="code" data-lang="ts" data-file="输入校验（伪代码，类 Express 风格）"><pre>
+function addProduct(req: Request, res: Response) {
+  // 参数直接来自最终用户，使用前必须校验
+  const name = sanitize(req.body.name);
+  const description = sanitize(req.body.description);
+  const price = Number(req.body.price);
+
+  const errors: string[] = [];
+  if (!isValidProductName(name)) errors.push("Invalid product name");
+  if (!isValidProductDescription(description)) errors.push("Invalid product description");
+  if (!isValidPriceRange(price)) errors.push("Invalid price");
+
+  if (errors.length === 0) {          // 全部合法才创建对象
+    const product = new Product(name, description, price);
+    database.save(product);
+    return res.redirect(`/products/${product.id}`);
+  }
+  return res.render("addProduct", { errors });   // 显示所有错误
+}
+</pre></div>
+</div>
+
+<p>数据在创建对象之前已经被校验过了。那还需要在类和方法里写契约吗？先看两者的区别：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="输入校验在系统边界拦截用户的非法输入并给出友好提示；契约保证内部类之间的调用正确，违反时程序停止">
+  <rect class="bx" x="20" y="80" width="90" height="70" rx="10"/>
+  <text class="ttl" x="65" y="112" text-anchor="middle">用户</text>
+  <text class="sm" x="65" y="132" text-anchor="middle">输入数据</text>
+  <circle class="bx-g" cx="140" cy="96" r="6"/><circle class="bx-r" cx="140" cy="116" r="6"/><circle class="bx-g" cx="140" cy="136" r="6"/>
+  <path class="ln" d="M150 116 H190" marker-end="url(#ar)"/>
+
+  <rect class="bx-b" x="194" y="40" width="30" height="160" rx="6"/>
+  <text class="sm on-b" x="209" y="222" text-anchor="middle">输入校验</text>
+  <path class="ln-r" d="M194 116 C170 170 110 190 80 160" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="30" y="200">非法：友好提示，让用户重试</text>
+  <text class="sm on-r" x="30" y="216">「数量必须是数字」</text>
+
+  <rect class="bx-d" x="250" y="30" width="490" height="180" rx="14"/>
+  <text class="sm" x="266" y="50">系统内部：数据已经是干净的</text>
+  <rect class="bx" x="290" y="90" width="110" height="50" rx="8"/><text class="ttl" x="345" y="120" text-anchor="middle">类 A</text>
+  <rect class="bx" x="460" y="90" width="110" height="50" rx="8"/><text class="ttl" x="515" y="120" text-anchor="middle">类 B</text>
+  <rect class="bx" x="610" y="90" width="110" height="50" rx="8"/><text class="ttl" x="665" y="120" text-anchor="middle">类 C</text>
+  <path class="ln" d="M226 116 H286" marker-end="url(#ar)"/>
+  <path class="ln-a" d="M402 115 H456" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M572 115 H606" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="430" y="106" text-anchor="middle">契约</text>
+  <text class="sm on-a" x="589" y="106" text-anchor="middle">契约</text>
+  <text class="lbl" x="495" y="170" text-anchor="middle">如果类之间出现了违反前置条件的调用 —— 这本不该发生 ——</text>
+  <text class="lbl" x="495" y="190" text-anchor="middle">程序停止，给用户一个通用的错误页面</text>
+</svg>
+<figcaption>图 4-7　校验挡在系统门口，面向用户；契约守在类与类之间，面向开发者</figcaption>
+</figure>
+
+<div class="vs">
+  <div class="old"><div class="h">输入校验（validation）</div>
+    <div style="padding:10px 14px">防止用户的坏数据渗入系统。<strong>预期会发生</strong>：用户随时可能在「数量」里填字母。发生时返回友好的提示，通常要一次性列出<strong>所有</strong>错误。</div></div>
+  <div class="new"><div class="h">契约（contract）</div>
+    <div style="padding:10px 14px">保证类之间的通信没有问题。<strong>不预期会发生</strong>：数据已经校验过了。万一发生了，说明出现了意料之外的情况（Bug），程序停止。</div></div>
+</div>
+
+<p>
+  两者目的不同，<strong>都应该做</strong>。问题是如何避免重复：如果校验已经检查过「描述长度大于 10 个字符」，作者就不会在 Product 构造函数里再把它作为前置条件检查一遍 ——
+  这意味着架构必须保证：没有经过输入校验，Product 就不会被创建。系统中要有一些「安全区」，进来的数据都已被清洗过。
+  反过来，如果某条契约非常重要、违反后果严重，作者也不介意多一点重复，在校验时和契约检查时各查一次。
+  （Arie van Deursen 在 Stack Overflow 上有一个关于两者区别的精彩回答，强烈推荐。）
+</p>
+
+<h3 id="assert-vs-exception">断言还是异常？</h3>
+
+<p>Java 没有表达契约的专门机制（F# 等少数语言有）。<code>assert</code> 不错，但忘了在运行时开启的话，生产环境就不会检查契约，所以很多开发者更喜欢用异常。作者的经验法则：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="断言与异常的选择决策树">
+  <polygon points="380,14 520,48 380,82 240,48" class="bx-a"/>
+  <text class="ttl on-a" x="380" y="53" text-anchor="middle">在写库 / 工具类？</text>
+  <path class="ln-g" d="M240 48 H130 V110" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="190" y="40" text-anchor="middle">是</text>
+  <rect class="bx-g" x="30" y="114" width="200" height="56" rx="10"/>
+  <text class="ttl on-g" x="130" y="138" text-anchor="middle">用异常</text>
+  <text class="sm" x="130" y="156" text-anchor="middle">效仿最流行的那些库</text>
+
+  <path class="ln" d="M380 84 V106" marker-end="url(#ar)"/>
+  <text class="sm" x="390" y="100">否，是业务类</text>
+  <polygon points="380,110 540,144 380,178 220,144" class="bx-b"/>
+  <text class="ttl on-b" x="380" y="140" text-anchor="middle">数据确定已在前面的层</text>
+  <text class="ttl on-b" x="380" y="158" text-anchor="middle">（如 Controller）清洗过？</text>
+  <path class="ln-g" d="M540 144 H556" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="548" y="134" text-anchor="middle">是</text>
+  <rect class="bx-p" x="560" y="116" width="180" height="56" rx="10"/>
+  <text class="ttl on-p" x="650" y="140" text-anchor="middle">用断言</text>
+  <text class="sm" x="650" y="158" text-anchor="middle">不预期违反；配友好错误页</text>
+  <path class="ln-r" d="M380 180 V196" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="390" y="194">不确定</text>
+  <rect class="bx-g" x="290" y="200" width="180" height="50" rx="10"/>
+  <text class="ttl on-g" x="380" y="222" text-anchor="middle">用异常</text>
+  <text class="sm" x="380" y="240" text-anchor="middle">宁可多查一次</text>
+</svg>
+<figcaption>图 4-8　作者选择断言还是异常的经验法则</figcaption>
+</figure>
+
+<p>至于<strong>输入校验</strong>，作者既不用断言也不用异常，而是用更优雅的方式建模：你很少希望第一个检查失败就停下，更常见的是给用户看一个完整的错误列表；复杂的校验也可能需要大量代码。可以参考 Eric Evans《领域驱动设计》中的<strong>规格模式（Specification pattern）</strong>，以及 John Regehr 的文章《Use of Assertions》（2014）。</p>
+
+<p>本章为了简单使用了 <code>RuntimeException</code> 这类通用异常。实践中你可能更想抛出语义化的异常，比如 <code>NegativeValueException</code>，方便调用方区分业务异常和真正百年一遇的异常。</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 术语上的严谨性</div>
+  <p>形式语义学者并不认为 if + 抛异常属于契约式设计 —— 那叫<strong>防御式编程</strong>。作者用「契约式设计」这个词，指的是「思考契约并以某种方式把它们显式写进代码」这个理念。</p>
+</div>
+
+<h3>抛异常还是返回「软值」？</h3>
+<ul>
+  <li>如果这是<strong>不该发生的行为</strong>，调用方收到也不知道怎么办 → <strong>抛异常</strong>。比如 calculateTax 收到负数：应该停止程序而不是算出错误结果，监控系统会捕获异常，我们去调试。</li>
+  <li>如果能给调用方一个<strong>让它继续工作的软返回值</strong> → <strong>返回软值</strong>。比如一个 trim 字符串的工具方法，前置条件是不接受 null，但遇到 null 时返回空字符串，调用方完全能处理。</li>
+</ul>
+
+<h3>什么时候不该用契约式设计？</h3>
+<p>
+  作者说他想不出一个不用的好理由。面向对象系统的开发，本质上就是让对象能正确地沟通协作。经验表明，把前后置条件和不变式显式写进代码并不昂贵，也不费时。
+  （这里说的不包括输入校验 —— 那是必须做的，无论你喜不喜欢契约。）
+</p>
+<p>但<strong>契约不能取代测试</strong>：你无法只靠前置条件、后置条件和不变式来表达一段代码的全部预期行为。<strong>用契约保证类与类之间可以放心地沟通，用测试保证类的行为正确。</strong></p>
+
+<h3>要为契约写测试吗？</h3>
+<p>
+  断言、契约检查在某种意义上是从<em>内部</em>测试生产代码。还需要为它们写单元测试吗？
+  作者<strong>通常会为输入校验写自动化测试</strong>，确保校验机制就位且正常工作；但<strong>很少为断言写测试</strong>，它们会被其他关注业务规则的测试自然覆盖。
+</p>
+<p>如果你的契约是用异常实现的（比如库代码），测试它和测试任何其他行为没有区别：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="TaxCalculatorTest.java"><pre>
+@Test
+void rejectsNegativeValues() {
+  assertThatThrownBy(() -&gt; new TaxCalculator().calculateTax(-1))
+      .isInstanceOf(RuntimeException.class)
+      .hasMessage("Value has to be positive");
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_tax_calculator.py"><pre>
+import pytest
+from tax_calculator import TaxCalculator
+
+def test_rejects_negative_values():
+    with pytest.raises(ValueError, match="has to be positive"):
+        TaxCalculator().calculate_tax(-1)
+</pre></div>
+<div class="code" data-lang="ts" data-file="taxCalculator.test.ts"><pre>
+import { test, expect } from "vitest";
+import { TaxCalculator } from "./taxCalculator";
+
+test("rejects negative values", () =&gt; {
+  expect(() =&gt; new TaxCalculator().calculateTax(-1)).toThrow(/has to be positive/);
+});
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 覆盖率工具和断言</div>
+  <p>有些覆盖率工具处理不好断言。例如 JaCoCo 无法为 assert 语句报告完整的分支覆盖（断言失败的那个分支几乎永远不会走到）。这又是一个不能盲目看覆盖率数字的例子。</p>
+</div>
+
+<h3>工具支持</h3>
+
+<div class="tw">
+<table>
+  <tr><th>生态</th><th>工具</th><th>作用</th></tr>
+  <tr><td>Java</td><td>IntelliJ 的 <code>@Nullable</code> / <code>@NotNull</code></td><td>IDE 提示可能的违反，还能在编译时转成真正的断言</td></tr>
+  <tr><td>Java</td><td>Bean Validation（<code>@Email</code>、<code>@Min</code>、<code>@Max</code>…）</td><td>声明式地写复杂校验</td></tr>
+  <tr><td>Python</td><td>类型注解 + mypy；<code>icontract</code>、<code>deal</code></td><td>静态检查 None；用装饰器声明前置/后置条件和不变式</td></tr>
+  <tr><td>Python</td><td>Pydantic</td><td>声明式的数据校验</td></tr>
+  <tr><td>TypeScript</td><td><code>strictNullChecks</code>、断言签名 <code>asserts cond</code></td><td>编译期排除 null；断言后自动收窄类型</td></tr>
+  <tr><td>TypeScript</td><td>Zod、Valibot</td><td>在系统边界做运行时校验，并推导出类型</td></tr>
+</table>
+</div>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>契约让类与类之间可以安全地沟通，没有意外。</li>
+  <li>实践中，设计契约就是显式定义类和方法的前置条件、后置条件和不变式。</li>
+  <li>选择弱契约还是强契约取决于上下文，各有利弊。</li>
+  <li>契约式设计不能取代输入校验。两者目的不同，都应该做。</li>
+  <li>修改契约时，要思考它对所有调用方的影响：前置条件只能变弱，后置条件只能变强。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>4.1　以下哪个是在代码中使用断言的正当理由？（A 验证有副作用的表达式　B 处理程序中的异常情况　C 做用户输入校验　D 让调试更容易）</summary>
+<p><strong>D</strong>。断言让违反契约的地方立刻暴露，错误信息精确，调试更容易。有副作用的表达式不能放进断言（断言关掉后副作用也没了）；用户输入校验和异常情况处理不该用断言。</p></details>
+
+<details class="quiz"><summary>4.2　<code>squareAt(x, y)</code> 断言了 x、y 在范围内、board 不为 null，最后断言 <code>result != null</code>。如果删掉最后这条，现有前置条件能保证结果不为 null 吗？还能怎么保证？</summary>
+<div class="code" data-lang="java"><pre>
+public Square squareAt(int x, int y) {
+  assert x &gt;= 0;
+  assert x &lt; board.length;
+  assert y &gt;= 0;
+  assert y &lt; board[x].length;
+  assert board != null;
+  Square result = board[x][y];
+  assert result != null;
+  return result;
+}
+</pre></div>
+<p><strong>不能。</strong>前置条件只保证 board 本身不为 null、x 和 y 在范围内，但不保证 board 里的<em>元素</em>不为 null。要得到同样的保证，类需要一个<strong>不变式：board 中没有任何位置是 null</strong>。</p></details>
+
+<details class="quiz"><summary>4.3　上题中哪些断言可以变成类的不变式？（A x 的范围　B board != null　C result != null　D y 的范围）</summary>
+<p><strong>B</strong>。board 不为 null 是对象整个生命周期都应成立的条件；x、y 是方法参数，result 是局部结果，都不属于对象状态。</p></details>
+
+<details class="quiz"><summary>4.4　开启断言运行应用，某个第三方库报告类不变式被违反。假设你的应用遵守了库的所有前置条件，该怎么办？</summary>
+<p><strong>这说明库的实现有问题，需要修复库的代码。</strong>你遵守了前置条件，而不变式是库自己负责维护的。关掉断言只是掩盖问题；这也不是接口设计问题或你调用方式的问题。</p></details>
+
+<details class="quiz"><summary>4.5　静态方法可以有不变式吗？</summary>
+<p><strong>不能。</strong>类不变式关乎整个对象的状态，而静态方法不属于任何对象（无状态），所以类不变式的概念不适用于静态方法。</p></details>
+
+<details class="quiz"><summary>4.6　类 C 的方法 M 有前置条件 P、后置条件 Q。子类 C' 重写 M 得到 M'，其前置条件 P'、后置条件 Q' 应该满足什么？</summary>
+<p><strong>P' 等于或弱于 P，Q' 等于或强于 Q。</strong>这就是里氏替换原则。</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch5</code> 目录用 <code>mvn test</code> 跑 <code>BasketTest</code>（<code>pom.xml</code> 里 surefire 已设置 <code>enableAssertions</code>，断言会生效）。然后在 <code>Basket.remove</code> 里故意把减法改成加法，观察是哪条断言先报警。</li>
+    <li>用 Python 实现上面的 Basket，分别用 <code>python</code> 和 <code>python -O</code> 运行一段违反前置条件的代码（比如 <code>add(p, 0)</code>），观察区别。</li>
+    <li>为 <code>TaxCalculator</code> 设计一个子类 <code>TaxCalculatorStudent</code>，要求它能替换基类而不违反 LSP。写一个测试，把它传给只认识基类的「客户端」代码。</li>
+    <li>找一个你项目里的公共方法，写下它的前置条件、后置条件，并判断：如果明天要把某个前置条件改强，哪些调用方会受影响？</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

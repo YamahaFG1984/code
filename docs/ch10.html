@@ -1,0 +1,987 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 10 章 · 测试代码质量 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="10">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 10 章</span>
+<h1>测试代码质量</h1>
+<p class="lede">
+  一旦「被测试感染」，团队写的测试会迅速增多，测试代码库增长得很快。Lehman 的演化定律 ——「代码会腐烂，除非有人主动与之对抗」—— 对测试代码同样成立。
+  和生产代码一样，我们必须花额外的力气让测试代码保持高质量，才能可持续地维护和演进。这一章从两个相反的角度看测试代码：
+  <strong>好的、可维护的测试长什么样</strong>，以及<strong>哪些「测试异味」会让测试难懂、难改</strong>。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>掌握可维护测试代码的十条原则</li>
+    <li>理解不稳定测试（flaky test）的成因和对策</li>
+    <li>用测试数据构建器（Test Data Builder）让测试更易读</li>
+    <li>识别并避免常见的测试异味：重复、不清晰的断言、资源处理不当、过于通用的夹具、过于敏感的断言</li>
+    <li>写自定义断言，让测试和易变的实现细节解耦</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="principles">可维护测试代码的原则</h2>
+
+<p>好的测试代码长什么样？关于测试代码质量有大量文献，这一节主要参考 Langr、Hunt 和 Thomas（2015）、Meszaros（2007）和 Beck（2019）的著作，加上作者自己的见解。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="好测试的十个特征">
+  <rect class="bx-b" x="14" y="14" width="140" height="120" rx="10"/>
+  <text class="ttl on-b" x="84" y="42" text-anchor="middle">⚡ 快</text>
+  <text class="sm" x="84" y="66" text-anchor="middle">反馈越快越好，</text>
+  <text class="sm" x="84" y="82" text-anchor="middle">慢的测试会被</text>
+  <text class="sm" x="84" y="98" text-anchor="middle">越跑越少</text>
+  <rect class="bx-b" x="164" y="14" width="140" height="120" rx="10"/>
+  <text class="ttl on-b" x="234" y="42" text-anchor="middle">🧩 内聚、独立</text>
+  <text class="sm" x="234" y="66" text-anchor="middle">一个测试一个行为；</text>
+  <text class="sm" x="234" y="82" text-anchor="middle">不依赖其他测试</text>
+  <text class="sm" x="234" y="98" text-anchor="middle">的执行顺序</text>
+  <rect class="bx-b" x="314" y="14" width="140" height="120" rx="10"/>
+  <text class="ttl on-b" x="384" y="42" text-anchor="middle">🎯 有存在理由</text>
+  <text class="sm" x="384" y="66" text-anchor="middle">帮你找 Bug 或</text>
+  <text class="sm" x="384" y="82" text-anchor="middle">记录行为，而不是</text>
+  <text class="sm" x="384" y="98" text-anchor="middle">为了刷覆盖率</text>
+  <rect class="bx-b" x="464" y="14" width="140" height="120" rx="10"/>
+  <text class="ttl on-b" x="534" y="42" text-anchor="middle">🔁 可重复</text>
+  <text class="sm" x="534" y="66" text-anchor="middle">跑多少次结果都</text>
+  <text class="sm" x="534" y="82" text-anchor="middle">一样，不 flaky</text>
+  <rect class="bx-b" x="614" y="14" width="132" height="120" rx="10"/>
+  <text class="ttl on-b" x="680" y="42" text-anchor="middle">💪 断言强</text>
+  <text class="sm" x="680" y="66" text-anchor="middle">断言所有该断言</text>
+  <text class="sm" x="680" y="82" text-anchor="middle">的东西</text>
+
+  <rect class="bx-g" x="14" y="150" width="140" height="120" rx="10"/>
+  <text class="ttl on-g" x="84" y="178" text-anchor="middle">🚨 行为变就失败</text>
+  <text class="sm" x="84" y="202" text-anchor="middle">改坏了行为还是</text>
+  <text class="sm" x="84" y="218" text-anchor="middle">全绿？测试有问题</text>
+  <rect class="bx-g" x="164" y="150" width="140" height="120" rx="10"/>
+  <text class="ttl on-g" x="234" y="178" text-anchor="middle">🔎 失败原因单一</text>
+  <text class="sm" x="234" y="202" text-anchor="middle">名字、输入、断言</text>
+  <text class="sm" x="234" y="218" text-anchor="middle">都清楚地说明</text>
+  <text class="sm" x="234" y="234" text-anchor="middle">哪里坏了</text>
+  <rect class="bx-g" x="314" y="150" width="140" height="120" rx="10"/>
+  <text class="ttl on-g" x="384" y="178" text-anchor="middle">✍ 容易写</text>
+  <text class="sm" x="384" y="202" text-anchor="middle">有摩擦就会被放弃：</text>
+  <text class="sm" x="384" y="218" text-anchor="middle">投资测试基础设施</text>
+  <rect class="bx-g" x="464" y="150" width="140" height="120" rx="10"/>
+  <text class="ttl on-g" x="534" y="178" text-anchor="middle">📖 容易读</text>
+  <text class="sm" x="534" y="202" text-anchor="middle">读代码的时间远多于</text>
+  <text class="sm" x="534" y="218" text-anchor="middle">写代码：清晰的数据、</text>
+  <text class="sm" x="534" y="234" text-anchor="middle">构建器、清晰的断言</text>
+  <rect class="bx-g" x="614" y="150" width="132" height="120" rx="10"/>
+  <text class="ttl on-g" x="680" y="178" text-anchor="middle">🔧 容易改</text>
+  <text class="sm" x="680" y="202" text-anchor="middle">生产代码变了，</text>
+  <text class="sm" x="680" y="218" text-anchor="middle">要改的测试点</text>
+  <text class="sm" x="680" y="234" text-anchor="middle">越少越好</text>
+</svg>
+<figcaption>图 10-1　好测试的十个特征</figcaption>
+</figure>
+
+<h3>1. 测试要快</h3>
+<p>测试是开发者的安全网，反馈越快越好。慢的测试集会让我们越跑越少，也就越来越没用。快与慢没有硬性界限，凭常识判断。遇到慢测试时可以考虑：</p>
+<ul>
+  <li>用 Mock 或 Stub 替换测试中较慢的组件；</li>
+  <li>重新设计生产代码，让慢的部分可以和快的部分分开测试；</li>
+  <li>把慢测试移到另一个测试集，不那么频繁地运行。</li>
+</ul>
+<p>有时慢测试无法避免，比如 SQL 测试。作者把慢测试和快测试分开：快测试随时跑；修改了与慢测试相关的生产代码时才跑慢测试；提交代码前和持续集成时也跑。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="JUnit 5：给慢测试打标签"><pre>
+@Tag("slow")                         // 用标签区分快慢测试
+class InvoiceDaoIntegrationTest { /* …… */ }
+
+// Maven 里只跑快测试：mvn test -DexcludedGroups=slow
+// 只跑慢测试：      mvn test -Dgroups=slow
+</pre></div>
+<div class="code" data-lang="python" data-file="pytest：用 marker 区分快慢测试"><pre>
+import pytest
+
+@pytest.mark.slow                    # 在 pyproject.toml 的 [tool.pytest.ini_options] markers 里登记
+def test_invoice_dao_at_least(dao):
+    ...
+
+# 只跑快测试：pytest -m "not slow"
+# 只跑慢测试：pytest -m slow
+</pre></div>
+<div class="code" data-lang="ts" data-file="Vitest：按文件或名字区分快慢测试"><pre>
+// 约定：慢测试放在 *.slow.test.ts 里
+// vitest.config.ts
+export default defineConfig({
+  test: { exclude: ["**/*.slow.test.ts", "**/node_modules/**"] },   // 默认只跑快测试
+});
+
+// vitest.slow.config.ts
+export default defineConfig({
+  test: { include: ["**/*.slow.test.ts"] },                        // 只包含慢测试
+});
+
+// 只跑快测试：npx vitest run
+// 只跑慢测试：npx vitest run --config vitest.slow.config.ts
+</pre></div>
+</div>
+
+<h3>2. 测试要内聚、独立、隔离</h3>
+<p>
+  理想情况下，一个测试方法只测一个功能或行为。测了多个功能的「胖测试」（测试异味里叫<strong>急切测试，eager test</strong>）通常实现复杂，让人没法一眼看出在测什么，也更难维护。遇到这种测试，把它拆成多个更小的测试 —— 更简单、更短的测试更好。
+</p>
+<p>
+  测试也不应依赖其他测试才能成功：单独运行和跟整个测试集一起运行，结果应该一样。「测试 B 只有在测试 A 先跑的情况下才能通过」并不罕见，通常是因为 B 依赖 A 搭好的环境，这样的测试极不可靠。
+  让每个测试负责搭建自己所需的全部环境，并<strong>清理自己留下的烂摊子</strong>（删除创建的文件、清除插入数据库的数据）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="测试之间通过共享状态产生隐藏依赖：单独运行都通过，一起运行就失败">
+  <rect class="bx" x="20" y="30" width="150" height="50" rx="8"/><text class="ttl" x="95" y="60" text-anchor="middle">测试 A</text>
+  <rect class="bx" x="20" y="100" width="150" height="50" rx="8"/><text class="ttl" x="95" y="130" text-anchor="middle">测试 B</text>
+  <rect class="bx-r" x="300" y="60" width="160" height="60" rx="30"/>
+  <text class="ttl on-r" x="380" y="86" text-anchor="middle">共享的状态</text>
+  <text class="sm" x="380" y="104" text-anchor="middle">数据库、文件、静态变量</text>
+  <path class="ln-r" d="M172 55 L296 80" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="232" y="54">写入，不清理</text>
+  <path class="ln-r" d="M296 100 L172 125" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="232" y="132">读到意外的数据</text>
+  <rect class="bx-g" x="540" y="30" width="200" height="50" rx="8"/>
+  <text class="lbl on-g" x="640" y="52" text-anchor="middle">单独跑 A ✔　单独跑 B ✔</text>
+  <text class="sm" x="640" y="70" text-anchor="middle">各自都没问题</text>
+  <rect class="bx-r" x="540" y="100" width="200" height="50" rx="8"/>
+  <text class="lbl on-r" x="640" y="122" text-anchor="middle">A 然后 B ✘</text>
+  <text class="sm" x="640" y="140" text-anchor="middle">「测试运行战争」</text>
+</svg>
+<figcaption>图 10-2　隐藏的测试间依赖：解决办法是每个测试自己准备新鲜的夹具，并在结束时清理</figcaption>
+</figure>
+
+<h3>3. 测试要有存在的理由</h3>
+<p>你想要的测试，要么帮你找 Bug，要么帮你记录行为 —— 而不是比如为了提高覆盖率。没有好理由的测试就不该存在，因为<strong>每个测试都要维护</strong>。完美的测试集是用最少的测试发现所有 Bug；那做不到，但确保没有无用的测试是个好的开始。</p>
+
+<h3>4. 测试要可重复，不能不稳定</h3>
+<p>
+  可重复的测试，无论执行多少次都给出同样的结果。对于表现不稳定（没改任何代码，有时过有时不过）的测试，开发者会失去信任。
+  不稳定测试（flaky test）伤害团队的生产力：很难知道它失败是因为行为有 Bug，还是因为它本身不稳定。一点点地，我们会对测试集失去信心，甚至在测试失败时照样部署。Google 和 Facebook 都公开谈过不稳定测试带来的问题。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="不稳定测试的常见原因">
+  <rect class="bx-a" x="290" y="90" width="180" height="60" rx="30"/>
+  <text class="ttl on-a" x="380" y="118" text-anchor="middle">不稳定测试</text>
+  <text class="sm" x="380" y="136" text-anchor="middle">有时过，有时不过</text>
+  <rect class="bx-r" x="20" y="14" width="220" height="70" rx="10"/>
+  <text class="ttl on-r" x="130" y="38" text-anchor="middle">依赖外部 / 共享资源</text>
+  <text class="sm" x="130" y="58" text-anchor="middle">数据库不可用、有意外的数据、</text>
+  <text class="sm" x="130" y="74" text-anchor="middle">两个人同时用同一个数据库</text>
+  <rect class="bx-r" x="520" y="14" width="220" height="70" rx="10"/>
+  <text class="ttl on-r" x="630" y="38" text-anchor="middle">超时设置不当</text>
+  <text class="sm" x="630" y="58" text-anchor="middle">Web 测试常见：应用比平时慢，</text>
+  <text class="sm" x="630" y="74" text-anchor="middle">测试没等够就失败了</text>
+  <rect class="bx-r" x="20" y="156" width="220" height="70" rx="10"/>
+  <text class="ttl on-r" x="130" y="180" text-anchor="middle">测试之间的隐藏交互</text>
+  <text class="sm" x="130" y="200" text-anchor="middle">测试 A 以某种方式</text>
+  <text class="sm" x="130" y="216" text-anchor="middle">影响了测试 B 的结果</text>
+  <rect class="bx-r" x="520" y="156" width="220" height="70" rx="10"/>
+  <text class="ttl on-r" x="630" y="180" text-anchor="middle">时间、随机性、并发</text>
+  <text class="sm" x="630" y="200" text-anchor="middle">「今天」是哪天、随机种子、</text>
+  <text class="sm" x="630" y="216" text-anchor="middle">线程调度（见第 6、7 章的例子）</text>
+  <path class="ln-r" d="M242 60 L300 98"/><path class="ln-r" d="M518 60 L460 98"/>
+  <path class="ln-r" d="M242 180 L300 142"/><path class="ln-r" d="M518 180 L460 142"/>
+</svg>
+<figcaption>图 10-3　测试变得不稳定的常见原因</figcaption>
+</figure>
+
+<div class="box deep">
+  <div class="t">&#128270; 研究怎么说：Luo 等（2014）分析了 201 个不稳定测试</div>
+  <ul>
+    <li><strong>异步等待、并发、测试顺序依赖</strong>是三个最常见的原因。</li>
+    <li>大多数不稳定测试<strong>从写下的那一刻起</strong>就是不稳定的。</li>
+    <li>它们很少是因为平台差异（不会因为操作系统不同而失败）。</li>
+    <li>不稳定通常源于对外部资源的依赖，可以通过在测试运行之间清理共享状态来修复。</li>
+  </ul>
+  <p>自动检测不稳定测试的工具：DeFlaker（Bell 等，2018）监控最新代码变更的覆盖，如果一个新失败的测试根本没执行到任何改动的代码，就标记为不稳定；iDFlakies（Lam 等，2019）以随机顺序执行测试来寻找不稳定性。这些工具还不完全成熟，找出并修复不稳定测试仍是我们的责任。Meszaros 的网站上有一张帮你诊断的决策表（xunitpatterns.com，Erratic Test）。</p>
+</div>
+
+<p>一个常见的「修」法是加 <code>sleep</code>，但那只是把问题藏起来，还让测试变慢。更好的办法是<strong>等待一个条件</strong>，而不是等一段固定的时间：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="别睡固定时间，等一个条件"><pre>
+// ✘ 不稳定又慢：5 秒够不够？全凭运气
+bank.pay(bill);
+Thread.sleep(5000);
+assertThat(bank.getBalance()).isEqualTo(balance - 150);
+
+// ✔ 等到条件成立（或超时）。这里用 Awaitility 库
+bank.pay(bill);
+await().atMost(Duration.ofSeconds(10))
+       .until(() -&gt; bank.getBalance() == balance - 150);
+</pre></div>
+<div class="code" data-lang="python" data-file="别睡固定时间，等一个条件"><pre>
+import time
+
+# ✘ 不稳定又慢：5 秒够不够？全凭运气
+bank.pay(bill)
+time.sleep(5)
+assert bank.get_balance() == balance - 150
+
+# ✔ 等到条件成立（或超时）。一个小小的轮询辅助函数
+def wait_until(condition, timeout=10.0, interval=0.1):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() &lt; deadline:
+        if condition():
+            return
+        time.sleep(interval)
+    raise AssertionError("condition not met in time")
+
+bank.pay(bill)
+wait_until(lambda: bank.get_balance() == balance - 150)
+</pre></div>
+<div class="code" data-lang="ts" data-file="别睡固定时间，等一个条件"><pre>
+// ✘ 不稳定又慢：5 秒够不够？全凭运气
+await bank.pay(bill);
+await new Promise((r) =&gt; setTimeout(r, 5000));
+expect(await bank.getBalance()).toBe(balance - 150);
+
+// ✔ 等到条件成立（或超时）。Vitest 内置 expect.poll
+await bank.pay(bill);
+await expect.poll(() =&gt; bank.getBalance(), { timeout: 10_000 }).toBe(balance - 150);
+</pre></div>
+</div>
+
+<h3>5. 测试要有强断言</h3>
+<p>
+  测试存在的意义就是断言被执行的代码行为符合预期。极端的坏例子是<strong>没有断言</strong>的测试 —— 听起来奇怪，但真的会发生，不是因为我们不懂，而是因为写好断言可能很难。
+  如果行为的结果不容易观察，就重构被测类或方法，提高它的可观察性（参见第 7 章）。
+  断言要尽可能强：比如 <code>calculateFinalPrice()</code> 同时改变了 <code>finalPrice</code> 和 <code>taxPaid</code> 两个属性，如果测试只检查 finalPrice，taxPaid 的 Bug 就会溜走。<strong>断言所有该断言的东西。</strong>
+</p>
+
+<h3>6. 行为变了，测试就该失败</h3>
+<p>
+  如果你改坏了行为而测试集依然全绿，那测试就有问题了。可能是断言太弱，也可能是方法被覆盖了却没被真正测试（第 9 章的伪测试方法）。
+  写每个测试时，都确认它会在行为改变时失败。TDD 循环让你总能看到测试变红；作者也不怕<strong>故意往代码里放个 Bug</strong>，跑测试看它们变红，再把 Bug 撤回 —— 这其实就是手工版的变异测试（第 3 章）。
+</p>
+
+<h3>7. 失败的原因要单一而清楚</h3>
+<p>
+  我们喜欢会失败的测试，它们在代码部署前很久就指出了问题。但失败只是理解和修复 Bug 的第一步，测试代码应该帮你弄清是什么导致了失败：
+  测试要内聚，只检验一个（最好是很小的）行为；用名字表明它的意图和检验的行为；让任何人都能看懂传给被测方法的输入，输入复杂时用好的变量名和自然语言注释解释；断言要清楚，并说明为什么期望这个值。
+</p>
+
+<h3>8. 测试要容易写</h3>
+<p>
+  写测试不应该有摩擦。如果很难写（比如写一个集成测试要先搭数据库、逐个创建复杂对象……），人很容易就放弃了。
+  给开发者提供写测试所需的全部工具：测试要数据库？给他们一个只需调用一两个方法的 API，数据库就准备好了。第 9 章为 SQL 测试写的基类、为 Web 测试写的页面对象，就是这种基础设施 —— 一旦就位，剩下的就容易了。
+</p>
+
+<h3>9. 测试要容易读</h3>
+
+<p>测试代码库会增长得很大，但你往往要等到出了 Bug 或加新测试时才去读它。开发者读代码的时间远多于写代码的时间，所以节省阅读时间就是提高生产力。你知道的所有关于生产代码可读性的做法，同样适用于测试代码。看一个 Invoice 类：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch10/Invoice.java"><pre>
+public enum CustomerType { PERSON, COMPANY }
+
+public class Invoice {
+  private final double value;
+  private final String country;
+  private final CustomerType customerType;
+
+  public Invoice(double value, String country, CustomerType customerType) {
+    this.value = value;
+    this.country = country;
+    this.customerType = customerType;
+  }
+
+  public double calculate() {        // 我们要测的方法
+    double ratio = 0.1;
+    // 这里是根据金额、公司/个人、国家等计算比例的业务规则……
+    return value * ratio;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="invoice.py"><pre>
+from dataclasses import dataclass
+from enum import Enum
+
+class CustomerType(Enum):
+    PERSON = "person"
+    COMPANY = "company"
+
+@dataclass(frozen=True)
+class Invoice:
+    value: float
+    country: str
+    customer_type: CustomerType
+
+    def calculate(self) -&gt; float:    # 我们要测的方法
+        ratio = 0.1
+        # 这里是根据金额、公司/个人、国家等计算比例的业务规则……
+        return self.value * ratio
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoice.ts"><pre>
+export type CustomerType = "PERSON" | "COMPANY";
+
+export class Invoice {
+  constructor(
+    readonly value: number,
+    readonly country: string,
+    readonly customerType: CustomerType,
+  ) {}
+
+  calculate(): number {              // 我们要测的方法
+    const ratio = 0.1;
+    // 这里是根据金额、公司/个人、国家等计算比例的业务规则……
+    return this.value * ratio;
+  }
+}
+</pre></div>
+</div>
+
+<div class="vs">
+  <div class="old"><div class="h">✘ 不太清楚的测试</div>
+    <div class="langs" style="margin:0">
+<div class="code" data-lang="java"><pre>
+@Test
+void test1() {
+  Invoice invoice = new Invoice(2500, "NL",
+      CustomerType.COMPANY);
+  double v = invoice.calculate();
+  assertThat(v).isEqualTo(250);
+}
+</pre></div>
+<div class="code" data-lang="python"><pre>
+def test1():
+    invoice = Invoice(2500, "NL",
+                      CustomerType.COMPANY)
+    v = invoice.calculate()
+    assert v == 250
+</pre></div>
+<div class="code" data-lang="ts"><pre>
+test("test1", () =&gt; {
+  const invoice = new Invoice(2500, "NL",
+    "COMPANY");
+  const v = invoice.calculate();
+  expect(v).toBe(250);
+});
+</pre></div>
+    </div>
+    <div style="padding:10px 14px;font-size:14px">test1 是什么？v 是什么？"NL" 和 COMPANY 对这个测试重要，还是随便选的？真实系统的 Invoice 可能有几十个属性。</div></div>
+  <div class="new"><div class="h">✔ 更易读的测试</div>
+    <div class="langs" style="margin:0">
+<div class="code" data-lang="java"><pre>
+@Test
+void taxesForCompanies() {
+  Invoice invoice = new InvoiceBuilder()
+      .asCompany()
+      .withCountry("NL")
+      .withAValueOf(2500.0)
+      .build();
+  double calculatedValue = invoice.calculate();
+  assertThat(calculatedValue)
+      .isEqualTo(250.0); // 2500 * 0.1 = 250
+}
+</pre></div>
+<div class="code" data-lang="python"><pre>
+def test_taxes_for_companies():
+    invoice = (InvoiceBuilder()
+               .as_company()
+               .with_country("NL")
+               .with_a_value_of(2500.0)
+               .build())
+    calculated_value = invoice.calculate()
+    assert calculated_value == 250.0  # 2500*0.1
+</pre></div>
+<div class="code" data-lang="ts"><pre>
+test("taxes for companies", () =&gt; {
+  const invoice = new InvoiceBuilder()
+    .asCompany()
+    .withCountry("NL")
+    .withAValueOf(2500)
+    .build();
+  const calculatedValue = invoice.calculate();
+  expect(calculatedValue)
+    .toBe(250); // 2500 * 0.1 = 250
+});
+</pre></div>
+    </div>
+    <div style="padding:10px 14px;font-size:14px">名字说明了在测什么；构建器清楚地说明了这是一张什么样的发票；结果变量名一目了然；注释解释了 250 从哪来。</div></div>
+</div>
+
+<ul>
+  <li><strong>用测试的内容给测试命名。</strong>好名字能让人不读方法体就知道在测什么，浏览测试集时很有帮助。有人主张更详细，比如 <code>taxesForCompanyAreTaxRateMultipliedByAmount</code>，连业务规则都说清了。
+    前几章测 substringsBetween、leftPad 这种单一职责的方法时，用一个通用名字的参数化测试就够了；但企业系统里 <code>calculateTaxes</code> 这类业务方法，每个测试（分区）对应不同的业务规则，值得在名字里体现。</li>
+  <li><strong>用测试数据构建器。</strong>InvoiceBuilder 是 Pryce（2007）定义的<strong>测试数据构建器（Test Data Builder）</strong>，用清晰、富有表现力的 API 帮我们创建测试场景。</li>
+</ul>
+
+<h3>测试数据构建器</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="测试数据构建器：有合理的默认值，测试只覆盖它关心的字段">
+  <rect class="bx" x="20" y="30" width="210" height="140" rx="12"/>
+  <text class="ttl" x="125" y="56" text-anchor="middle">InvoiceBuilder 默认值</text>
+  <text class="mono" x="40" y="86">country = "NL"</text>
+  <text class="mono" x="40" y="110">customerType = PERSON</text>
+  <text class="mono" x="40" y="134">value = 500</text>
+  <text class="sm" x="125" y="158" text-anchor="middle">合理、有效的一张发票</text>
+  <path class="ln" d="M232 100 H286" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="290" y="30" width="230" height="140" rx="12"/>
+  <text class="ttl on-a" x="405" y="56" text-anchor="middle">测试只改它关心的</text>
+  <text class="mono" x="310" y="86">.asCompany()</text>
+  <text class="mono" x="310" y="110">.withAValueOf(2500)</text>
+  <text class="mono" x="310" y="134">.build()</text>
+  <text class="sm" x="405" y="158" text-anchor="middle">每个方法 return this → 可以链式调用</text>
+  <path class="ln" d="M522 100 H576" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="580" y="30" width="160" height="140" rx="12"/>
+  <text class="ttl on-g" x="660" y="56" text-anchor="middle">Invoice</text>
+  <text class="mono" x="600" y="86">NL</text>
+  <text class="mono on-a" x="600" y="110">COMPANY</text>
+  <text class="mono on-a" x="600" y="134">2500</text>
+  <text class="sm" x="660" y="158" text-anchor="middle">读者一眼看出重点</text>
+</svg>
+<figcaption>图 10-4　构建器提供默认值，测试只需说出「这个测试特别在哪」</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch10/InvoiceBuilder.java"><pre>
+public class InvoiceBuilder {
+  // 预设值：测试只需设置当前用例关心的字段
+  private String country = "NL";
+  private CustomerType customerType = CustomerType.PERSON;
+  private double value = 500;
+
+  public InvoiceBuilder withCountry(String country) {
+    this.country = country;
+    return this;                       // 返回自身，才能链式调用
+  }
+
+  public InvoiceBuilder asCompany() {
+    this.customerType = CustomerType.COMPANY;
+    return this;
+  }
+
+  public InvoiceBuilder withAValueOf(double value) {
+    this.value = value;
+    return this;
+  }
+
+  public Invoice build() {
+    return new Invoice(value, country, customerType);
+  }
+
+  // 可选的快捷方法：常用的夹具一行搞定
+  public Invoice anyCompany() {
+    return new Invoice(value, country, CustomerType.COMPANY);
+  }
+
+  public Invoice fromTheUS() {
+    return new Invoice(value, "US", customerType);
+  }
+}
+
+// 一行就能拿到一张「普通」的发票：个人、500、NL
+var invoice = new InvoiceBuilder().build();
+</pre></div>
+<div class="code" data-lang="python" data-file="invoice_builder.py"><pre>
+from dataclasses import replace
+from invoice import CustomerType, Invoice
+
+class InvoiceBuilder:
+    def __init__(self):
+        # 预设值：测试只需设置当前用例关心的字段
+        self._invoice = Invoice(value=500, country="NL", customer_type=CustomerType.PERSON)
+
+    def with_country(self, country: str) -&gt; "InvoiceBuilder":
+        self._invoice = replace(self._invoice, country=country)
+        return self                    # 返回自身，才能链式调用
+
+    def as_company(self) -&gt; "InvoiceBuilder":
+        self._invoice = replace(self._invoice, customer_type=CustomerType.COMPANY)
+        return self
+
+    def with_a_value_of(self, value: float) -&gt; "InvoiceBuilder":
+        self._invoice = replace(self._invoice, value=value)
+        return self
+
+    def build(self) -&gt; Invoice:
+        return self._invoice
+
+# 更 Python 的另一种写法：带默认值的工厂函数，用关键字参数覆盖
+def an_invoice(**overrides) -&gt; Invoice:
+    defaults = dict(value=500, country="NL", customer_type=CustomerType.PERSON)
+    return Invoice(**{**defaults, **overrides})
+
+invoice = an_invoice(customer_type=CustomerType.COMPANY, value=2500)
+</pre></div>
+<div class="code" data-lang="ts" data-file="invoiceBuilder.ts"><pre>
+import { CustomerType, Invoice } from "./invoice";
+
+export class InvoiceBuilder {
+  // 预设值：测试只需设置当前用例关心的字段
+  private country = "NL";
+  private customerType: CustomerType = "PERSON";
+  private value = 500;
+
+  withCountry(country: string): this {
+    this.country = country;
+    return this;                       // 返回自身，才能链式调用
+  }
+
+  asCompany(): this {
+    this.customerType = "COMPANY";
+    return this;
+  }
+
+  withAValueOf(value: number): this {
+    this.value = value;
+    return this;
+  }
+
+  build(): Invoice {
+    return new Invoice(this.value, this.country, this.customerType);
+  }
+}
+
+// 更 TS 的另一种写法：带默认值的工厂函数，用对象展开覆盖
+export const anInvoice = (overrides: Partial&lt;{ value: number; country: string; customerType: CustomerType }&gt; = {}) =&gt; {
+  const d = { value: 500, country: "NL", customerType: "PERSON" as CustomerType, ...overrides };
+  return new Invoice(d.value, d.country, d.customerType);
+};
+
+const invoice = anInvoice({ customerType: "COMPANY", value: 2500 });
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 造测试数据的库</div>
+  <p>构建复杂测试数据太常见了，所以有专门的框架：Java 的 Java Faker / Datafaker，Ruby 的 factory_bot，Python 的 factory_boy 和 Faker，TypeScript 的 @faker-js/faker、fishery。</p>
+</div>
+
+<p>断言旁边那句注释 <code>// 2500 * 0.1 = 250</code> 呢？有人会说需要注释本身就说明代码可以改进。去掉注释的办法是引入<strong>解释性变量</strong>。用哪种方式，由你和团队商定：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="用解释性变量代替注释"><pre>
+@Test
+void taxesForCompanyAreTaxRateMultipliedByAmount() {
+  double invoiceValue = 2500.0;        // 解释性变量
+  double tax = 0.1;
+
+  Invoice invoice = new InvoiceBuilder()
+      .asCompany()
+      .withCountry("NL")
+      .withAValueOf(invoiceValue)
+      .build();
+
+  double calculatedValue = invoice.calculate();
+
+  assertThat(calculatedValue).isEqualTo(invoiceValue * tax);   // 不再有魔法数字
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="用解释性变量代替注释"><pre>
+def test_taxes_for_company_are_tax_rate_multiplied_by_amount():
+    invoice_value = 2500.0               # 解释性变量
+    tax = 0.1
+
+    invoice = (InvoiceBuilder().as_company().with_country("NL")
+               .with_a_value_of(invoice_value).build())
+
+    calculated_value = invoice.calculate()
+
+    assert calculated_value == pytest.approx(invoice_value * tax)   # 不再有魔法数字
+</pre></div>
+<div class="code" data-lang="ts" data-file="用解释性变量代替注释"><pre>
+test("taxes for company are tax rate multiplied by amount", () =&gt; {
+  const invoiceValue = 2500;           // 解释性变量
+  const tax = 0.1;
+
+  const invoice = new InvoiceBuilder().asCompany().withCountry("NL")
+    .withAValueOf(invoiceValue).build();
+
+  const calculatedValue = invoice.calculate();
+
+  expect(calculatedValue).toBeCloseTo(invoiceValue * tax);       // 不再有魔法数字
+});
+</pre></div>
+</div>
+
+<h3>10. 测试要容易改、容易演进</h3>
+<p>
+  我们总希望设计出稳定的、单一职责的、对修改关闭对扩展开放的类，但现实并非总是如此。生产代码会变，测试也会跟着变。
+  你的任务是让修改测试不那么痛苦：完全无痛不可能，但可以<strong>减少需要修改的点</strong>。比如同一段代码出现在 10 个测试方法里，就把它提取出来，将来只需改 1 处而不是 10 处。
+  测试总会以某种方式与生产代码耦合，这是事实。测试对生产代码的工作方式知道得越多，就越难修改（第 6 章讲过，Mock 的明显缺点就是与生产代码的强耦合）。测试需要知道多少才能测好，是一个很大的挑战。
+</p>
+
+<h2 id="smells">测试异味</h2>
+
+<p>
+  <strong>代码异味（code smell）</strong>是指可能暗示系统中更深层问题的症状，比如「过长方法」「过大的类」「上帝类」。多项研究表明代码异味会妨碍软件的理解和维护。
+  社区也整理了专门针对测试代码的异味目录，研究表明它们在现实中很普遍，而且（不出所料）会损害测试集的可维护性和可理解性（Spadini 等，2020）。
+  更完整的清单见 Meszaros 的《xUnit Test Patterns》（2007），以及 van Deursen 等人关于测试异味的奠基论文（2001）。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="本章讨论的五种测试异味">
+  <rect class="bx-r" x="14" y="20" width="138" height="160" rx="10"/>
+  <text class="ttl on-r" x="83" y="48" text-anchor="middle">过度重复</text>
+  <text class="sm" x="83" y="76" text-anchor="middle">复制粘贴的</text>
+  <text class="sm" x="83" y="92" text-anchor="middle">准备代码，改一处</text>
+  <text class="sm" x="83" y="108" text-anchor="middle">忘了另外九处</text>
+  <text class="sm on-g" x="83" y="150" text-anchor="middle">→ 提取方法 / 类</text>
+  <rect class="bx-r" x="164" y="20" width="138" height="160" rx="10"/>
+  <text class="ttl on-r" x="233" y="48" text-anchor="middle">断言不清</text>
+  <text class="sm" x="233" y="76" text-anchor="middle">看不懂在断言什么、</text>
+  <text class="sm" x="233" y="92" text-anchor="middle">失败了也看不懂</text>
+  <text class="sm" x="233" y="108" text-anchor="middle">为什么</text>
+  <text class="sm on-g" x="233" y="150" text-anchor="middle">→ 自定义断言、注释</text>
+  <rect class="bx-r" x="314" y="20" width="138" height="160" rx="10"/>
+  <text class="ttl on-r" x="383" y="48" text-anchor="middle">资源处理不当</text>
+  <text class="sm" x="383" y="76" text-anchor="middle">资源乐观主义、</text>
+  <text class="sm" x="383" y="92" text-anchor="middle">神秘访客</text>
+  <text class="sm on-g" x="383" y="150" text-anchor="middle">→ 自己准备、显式</text>
+  <rect class="bx-r" x="464" y="20" width="138" height="160" rx="10"/>
+  <text class="ttl on-r" x="533" y="48" text-anchor="middle">过于通用的夹具</text>
+  <text class="sm" x="533" y="76" text-anchor="middle">一个巨大的夹具，</text>
+  <text class="sm" x="533" y="92" text-anchor="middle">每个测试只用</text>
+  <text class="sm" x="533" y="108" text-anchor="middle">其中一小部分</text>
+  <text class="sm on-g" x="533" y="150" text-anchor="middle">→ 构建器、专属夹具</text>
+  <rect class="bx-r" x="614" y="20" width="132" height="160" rx="10"/>
+  <text class="ttl on-r" x="680" y="48" text-anchor="middle">过于敏感的断言</text>
+  <text class="sm" x="680" y="76" text-anchor="middle">输出措辞一改，</text>
+  <text class="sm" x="680" y="92" text-anchor="middle">几十个测试一起碎</text>
+  <text class="sm on-g" x="680" y="150" text-anchor="middle">→ 封装断言</text>
+</svg>
+<figcaption>图 10-5　五种常见的测试异味及对策</figcaption>
+</figure>
+
+<h3>过度重复</h3>
+<p>
+  测试代码结构往往相似，出现重复并不奇怪（本书就用参数化测试来减少重复）。不细心的开发者会复制粘贴 —— 作者和 Treude、Zaidman 的一项实证研究（2021）观察到这在现实中常常发生 —— 而不是花点力气找更好的方案。
+  重复代码降低生产力：要改一段重复的代码，就得在每个地方都改，很容易漏掉一处。它也阻碍测试集的演进：生产代码变了，你不想改一大堆测试代码。
+  建议<strong>经常重构测试代码</strong>，把重复代码提取成私有方法或外部类，通常是快速、便宜的好办法。但务实是关键：一点重复可能无伤大雅，凭经验判断何时需要重构。
+</p>
+
+<h3>断言不清</h3>
+<p>
+  测试失败时，开发者首先看的就是断言。好的断言清楚地揭示失败原因、易读、尽可能具体。有些功能或业务规则复杂到需要一组复杂的断言，这时推荐写<strong>自定义断言</strong>来封装部分复杂性，并用自然语言注释快速说明这些断言在检查什么。不要怕写注释。
+</p>
+
+<div class="box key">
+  <div class="t">&#128273; 作者不同意「每个测试只能有一个断言」</div>
+  <p>
+    测试最佳实践的文献里常见一条「每个方法一个断言」：只有一个断言的测试只能关注一个行为，失败时也更好懂。作者<strong>强烈不同意</strong>这条规则：
+    如果测试足够内聚、只关注一个功能，断言就应该确保<strong>整个行为</strong>符合预期 —— 这可能意味着断言多个字段都被更新成了新值，也可能意味着断言 Mock 与其他依赖正确交互了。
+    强迫一个测试只有一个断言太极端了；当然，也不应该有无用的断言。
+  </p>
+</div>
+
+<p>很多框架提供<strong>软断言（soft assertion）</strong>：断言失败时不立刻中止测试，而是在最后统一报告（测试仍算失败）。一次看到所有失败的字段，调试更方便：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="AssertJ 的软断言"><pre>
+@Test
+void calculateFinalPriceUpdatesAllFields() {
+  cart.calculateFinalPrice();
+
+  SoftAssertions softly = new SoftAssertions();
+  softly.assertThat(cart.getFinalPrice()).isEqualTo(110.0);
+  softly.assertThat(cart.getTaxPaid()).isEqualTo(10.0);   // 上一行失败了，这行依然会检查
+  softly.assertAll();                                     // 统一报告所有失败
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="pytest-check 的软断言"><pre>
+# pip install pytest-check
+from pytest_check import check
+
+def test_calculate_final_price_updates_all_fields(cart):
+    cart.calculate_final_price()
+
+    with check:
+        assert cart.final_price == 110.0
+    with check:
+        assert cart.tax_paid == 10.0      # 上一个失败了，这个依然会检查，最后统一报告
+</pre></div>
+<div class="code" data-lang="ts" data-file="Vitest 的 expect.soft"><pre>
+test("calculate final price updates all fields", () =&gt; {
+  cart.calculateFinalPrice();
+
+  expect.soft(cart.finalPrice).toBe(110);
+  expect.soft(cart.taxPaid).toBe(10);     // 上一个失败了，这个依然会检查，最后统一报告
+});
+</pre></div>
+</div>
+
+<p>即使你知道该断言什么，选对断言方法也很重要。用了不合适的断言方法，失败信息可能很模糊（比如 <code>assertTrue(list.contains(x))</code> 只会告诉你「期望 true 实际 false」）。作者强烈推荐 AssertJ 及其丰富的断言集；Python 的 pytest 会自动展开 <code>assert</code> 的细节，Vitest 的 <code>expect</code> 也有很多专门的匹配器。</p>
+
+<h3>复杂或外部资源处理不当</h3>
+
+<dl class="terms">
+  <dt>资源乐观主义（resource optimism）</dt>
+  <dd>测试假设某个必需的资源（比如数据库）在它开始执行时已经就绪。资源不可用时测试失败，而且往往没有清楚的信息说明原因，开发者会以为引入了新 Bug。
+    <strong>对策：</strong>测试不应假设资源已处于正确状态，而要自己负责准备 —— 往数据库里填数据、把需要的文件写到磁盘、启动服务器。这些准备代码可能很复杂，尽量把它抽到别的类（如 <code>DatabaseInitialization</code>）里，让测试代码专注于用例。</dd>
+  <dt>假设资源永远可用</dt>
+  <dd>比如测试与一个 Web 服务交互，而它可能因为我们控制不了的原因宕机。<strong>对策：</strong>要么用 Stub 和 Mock 避免依赖外部资源；要么让测试集足够健壮 ——
+    资源不可用时<strong>跳过</strong>这个测试，并给出提醒说明原因。这看起来违反直觉，但记住：开发者信任他们的测试集，一个测试因为错误的原因失败，会让你对整个测试集失去信心。</dd>
+  <dt>神秘访客（mystery guest）</dt>
+  <dd>测试需要某个目录下的一个测试文件，文件不在测试就失败 —— 第一次接触的开发者很难理解这个前提。<strong>对策：</strong>测试代码应该<strong>显式地</strong>表明它的所有外部依赖。</dd>
+</dl>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="资源不可用时跳过，而不是失败"><pre>
+@Test
+void fetchesExchangeRates() {
+  // 假设不成立时，JUnit 把测试标记为「跳过」而不是「失败」
+  assumeTrue(ExchangeRateService.isReachable(), "exchange rate service is down, skipping");
+
+  assertThat(new ExchangeRateService().rate("EUR", "USD")).isPositive();
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="资源不可用时跳过，而不是失败"><pre>
+import pytest
+
+@pytest.mark.skipif(not exchange_rate_service_is_reachable(),
+                    reason="exchange rate service is down, skipping")
+def test_fetches_exchange_rates():
+    assert ExchangeRateService().rate("EUR", "USD") &gt; 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="资源不可用时跳过，而不是失败"><pre>
+const reachable = await exchangeRateServiceIsReachable();
+
+test.skipIf(!reachable)("fetches exchange rates", async () =&gt; {
+  expect(await new ExchangeRateService().rate("EUR", "USD")).toBeGreaterThan(0);
+});
+</pre></div>
+</div>
+
+<h3>过于通用的夹具</h3>
+<p>
+  <strong>夹具（fixture）</strong>是用来检验被测组件的一组输入值，它们是测试方法的主角，自然地来自我们用各种技术设计出的用例。
+  测试复杂组件时，可能要为每个想检验的分区构建不同的夹具，它们会变得复杂；更糟的是，测试彼此不同，夹具却可能有交集。
+  于是你可能决定声明一个适用于很多测试的大夹具，每个测试只用其中一小部分。这样能跑，但很快就难以维护：一个测试失败时，你面对的是一个大夹具，其中很多部分与这个测试无关，得手动过滤。
+  <strong>让每个测试的夹具尽可能具体、内聚</strong>，有助于理解测试的本质（在测试开始失败时尤其重要）。构建类的模式，特别是上面的测试数据构建器，能帮你避免通用夹具 —— 企业应用常常要创建一堆相互关联的业务实体，很容易写出通用夹具。
+</p>
+
+<h3>过于敏感的断言</h3>
+
+<p>坏的断言可能让测试在该失败时不失败，也可能让测试在<strong>不该失败时失败</strong>。组件的输出很脆弱（经常变）时，写好断言更难。测试代码应该尽可能不受被测组件实现细节的影响。看作者的 Andy 工具输出给学生的评估报告：</p>
+
+<div class="code" data-lang="plain" data-file="Andy 的输出（节选）"><pre>
+--- Compilation
+Success
+
+--- JUnit execution
+7/7 passed
+
+--- JaCoCo coverage
+Line coverage: 13/13
+Branch coverage: 12/12
+
+--- Mutation testing
+10/10 killed
+
+--- Meta tests
+13/13 passed
+Meta test: always finds clumps (weight: 1) PASSED
+Meta test: always returns zero (weight: 1) PASSED
+...
+
+--- Assessment
+Branch coverage: 12/12 (overall weight=0.10)
+Mutation coverage: 10/10 (overall weight=0.10)
+Meta tests: 13/13 (overall weight=0.80)
+Final grade: 100/100
+</pre></div>
+
+<p>
+  不假思索地写测试，就会写出一大堆「断言输出里包含某某字符串」的语句，比如 <code>assert output contains "Final grade: 100/100"</code>。为很多输出写很多用例后，测试集里到处都是这种断言。
+  注意这有多敏感：消息稍微一改，所有测试一起碎。这里只能断言字符串，所以他们为消息的每一部分写了<strong>自定义断言</strong>，把测试代码和具体字符串解耦。将来消息变了，只需改断言本身：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="自定义断言把几十个测试与具体的输出字符串解耦">
+  <rect class="bx" x="20" y="20" width="130" height="30" rx="6"/><text class="sm" x="85" y="40" text-anchor="middle">测试 1</text>
+  <rect class="bx" x="20" y="60" width="130" height="30" rx="6"/><text class="sm" x="85" y="80" text-anchor="middle">测试 2</text>
+  <rect class="bx" x="20" y="100" width="130" height="30" rx="6"/><text class="sm" x="85" y="120" text-anchor="middle">……测试 40</text>
+  <path class="ln" d="M152 35 L296 80" marker-end="url(#ar)"/>
+  <path class="ln" d="M152 75 H296" marker-end="url(#ar)"/>
+  <path class="ln" d="M152 115 L296 90" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="300" y="50" width="200" height="60" rx="10"/>
+  <text class="ttl on-a" x="400" y="76" text-anchor="middle">compilationErrorOnLine(10)</text>
+  <text class="sm" x="400" y="96" text-anchor="middle">唯一知道具体格式的地方</text>
+  <path class="ln" d="M502 80 H576" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="580" y="50" width="160" height="60" rx="10"/>
+  <text class="mono on-b" x="660" y="76" text-anchor="middle">"- line 10"</text>
+  <text class="sm" x="660" y="96" text-anchor="middle">输出的具体字符串</text>
+  <text class="sm" x="380" y="160" text-anchor="middle">输出格式一变，只改中间这一个地方，40 个测试都不用动</text>
+</svg>
+<figcaption>图 10-6　用自定义断言隔离易变的细节</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="自定义 AssertJ Condition"><pre>
+@Test
+void reportCompilationError() {
+  Result result = new ResultTestDataBuilder()            // 又一个测试数据构建器
+      .withCompilationFail(
+          new CompilationErrorInfo("Library.java", 10, "some compilation error"),
+          new CompilationErrorInfo("Library.java", 11, "some other compilation error"))
+      .build();
+
+  writer.write(ctx, result);                             // 调用被测方法
+  String output = generatedResult();
+
+  assertThat(output)                                     // 断言与具体字符串解耦
+      .has(noFinalGrade())
+      .has(not(compilationSuccess()))
+      .has(compilationFailure())
+      .has(compilationErrorOnLine(10))
+      .has(compilationErrorOnLine(11))
+      .has(compilationErrorType("some compilation error"))
+      .has(compilationErrorType("some other compilation error"));
+}
+
+// 自定义断言：返回 AssertJ 的 Condition&lt;String&gt;，泛型与被断言对象的类型一致
+public static Condition&lt;String&gt; compilationErrorOnLine(int lineNumber) {
+  return new Condition&lt;&gt;() {
+    @Override
+    public boolean matches(String value) {
+      return value.contains("- line " + lineNumber);    // 只有这里知道输出格式
+    }
+  };
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="自定义断言函数"><pre>
+# assertions.py —— 只有这里知道输出格式
+def assert_no_final_grade(output: str) -&gt; None:
+    assert "Final grade" not in output, "expected no final grade in the report"
+
+def assert_compilation_error_on_line(output: str, line: int) -&gt; None:
+    assert f"- line {line}" in output, f"expected a compilation error on line {line}"
+
+def assert_compilation_error_type(output: str, message: str) -&gt; None:
+    assert message in output, f"expected compilation error: {message!r}"
+
+
+# test_writer.py
+def test_report_compilation_error(writer):
+    result = (ResultTestDataBuilder()
+              .with_compilation_fail(
+                  CompilationErrorInfo("Library.java", 10, "some compilation error"),
+                  CompilationErrorInfo("Library.java", 11, "some other compilation error"))
+              .build())
+
+    output = writer.write(result)
+
+    assert_no_final_grade(output)
+    assert_compilation_error_on_line(output, 10)
+    assert_compilation_error_on_line(output, 11)
+    assert_compilation_error_type(output, "some compilation error")
+    assert_compilation_error_type(output, "some other compilation error")
+</pre></div>
+<div class="code" data-lang="ts" data-file="expect.extend 自定义匹配器"><pre>
+// assertions.ts —— 只有这里知道输出格式
+expect.extend({
+  toHaveCompilationErrorOnLine(output: string, line: number) {
+    const pass = output.includes(`- line ${line}`);
+    return {
+      pass,
+      message: () =&gt; `expected ${pass ? "no " : ""}compilation error on line ${line}`,
+    };
+  },
+  toHaveNoFinalGrade(output: string) {
+    const pass = !output.includes("Final grade");
+    return { pass, message: () =&gt; "expected no final grade in the report" };
+  },
+});
+
+// writer.test.ts
+test("report compilation error", () =&gt; {
+  const result = new ResultTestDataBuilder()
+    .withCompilationFail(
+      { file: "Library.java", line: 10, message: "some compilation error" },
+      { file: "Library.java", line: 11, message: "some other compilation error" })
+    .build();
+
+  const output = writer.write(result);
+
+  expect(output).toHaveNoFinalGrade();
+  expect(output).toHaveCompilationErrorOnLine(10);
+  expect(output).toHaveCompilationErrorOnLine(11);
+  expect(output).toContain("some compilation error");
+});
+// （TypeScript 还需要在一个 .d.ts 里为 Assertion 接口声明这两个新方法）
+</pre></div>
+</div>
+
+<p>回到大局：确保你的断言不会过于敏感，否则测试会无缘无故地坏掉。</p>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>写好测试代码和写好生产代码一样具有挑战性。我们应该确保测试代码易于维护和演进。</li>
+  <li>我们希望测试方法快、内聚、可重复；因一个原因失败，并有强断言；易读、易写、易演进；与生产代码松耦合。</li>
+  <li>很多东西会损害测试方法的可维护性：过多的重复、糟糕的断言、对复杂（外部）资源的处理不当、过于通用的夹具、过于敏感的断言，以及不稳定性。应该避免它们。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>10.1　两个测试单独运行都通过，一起运行就失败。以下哪项<em>不是</em>原因？（A 依赖同样的外部资源　B 执行顺序有影响　C 两个测试都很慢　D 执行后没有做清理）</summary>
+<p><strong>C。</strong>慢不会导致这种现象；共享资源、顺序依赖、没有清理都会。</p></details>
+
+<details class="quiz"><summary>10.2　下面这个测试最可能有什么测试异味？（A 不稳定测试　B 测试代码重复　C 晦涩的测试　D 过长方法）</summary>
+<div class="code" data-lang="java"><pre>
+@Test
+void test1() {
+  BankWebService bank = new BankWebService();   // 与银行通信的 Web 服务
+  User user = new User("d.bergkamp", "nl123");
+  bank.authenticate(user);
+  Thread.sleep(5000);                           // 睡 5 秒
+  double balance = bank.getBalance();
+  Thread.sleep(2000);
+
+  Payment bill = new Payment();
+  bill.setOrigin(user);
+  bill.setValue(150.0);
+  bill.setDescription("Energy bill");
+  bill.setCode("YHG45LT");
+  bank.pay(bill);
+  Thread.sleep(5000);
+
+  double newBalance = bank.getBalance();
+  Thread.sleep(2000);
+  Assertions.assertEquals(newBalance, balance - 150);   // 新余额应为旧余额 - 150
+}
+</pre></div>
+<p><strong>A，不稳定测试。</strong>依赖外部 Web 服务，还用固定时间的 sleep 来「等待」—— 服务一慢就失败。修法见上面「别睡固定时间，等一个条件」。</p></details>
+
+<details class="quiz"><summary>10.3　RepoDriller 的集成测试读取 <code>"test-repos/git-4"</code> 这样专门为测试创建的真实 Git 仓库，然后断言访问到的提交哈希。这个测试可能有什么异味？（A 测试中有条件逻辑　B 通用夹具　C 不稳定测试　D 神秘访客）</summary>
+<p><strong>D，神秘访客。</strong>测试依赖一个 Git 仓库才能工作。虽然测试里写明了路径，但开发者可能需要了解这个仓库长什么样，才能理解测试为什么失败。它不太可能不稳定：仓库不会变，Git 行为也不太会变，一切都在单线程里运行，没有并发问题。</p></details>
+
+<details class="quiz"><summary>10.4　Apache Commons Lang 的 <code>testRandomStringUtilsHomog</code> 用卡方检验检查随机字符的均匀性，注释写着「大约每 1000 次会随机失败一次」。以下哪项<em>错误</em>？（A 因为生成字符的随机性，这个测试不稳定　B 测试检查了非法字符，也检查了字符被均匀选中　C 方法是静态的与它的不稳定性无关　D 为了避免不稳定，开发者应该 Mock 掉 random() 函数）</summary>
+<p><strong>D。</strong>这个测试的目的就是测试生成器及其均匀性；如果 Mock 掉随机函数，测试就失去了意义。</p></details>
+
+<details class="quiz"><summary>10.5　两个测试单独运行通过、一起运行失败（又称「测试运行战争」，Test Run War）。以下哪项<em>最不可能</em>修复这个问题？（A 让每个测试运行器有自己的沙箱　B 每个测试使用新鲜的夹具　C 移除并隔离重复的测试代码　D 在 teardown 时清理状态）</summary>
+<p><strong>C。</strong>去除重复能提升可维护性，但不能解决测试之间通过共享状态互相影响的问题。</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch10</code> 目录跑 <code>mvn test</code>。给 <code>InvoiceBuilder</code> 加上 <code>anyCompany()</code> 和 <code>fromTheUS()</code> 快捷方法，并用它们写两个新测试。</li>
+    <li>回到前几章任选一个测试类，按本章的十条原则逐条检查：有急切测试吗？有魔法数字吗？测试名说明了行为吗？挑两处改进。</li>
+    <li>故意在某个被测方法里引入一个 Bug，看看测试是否变红（原则 6）。如果没有，说明哪条断言太弱了？</li>
+    <li>把练习 10.2 的银行测试重写成稳定的版本：用 Stub 替掉 Web 服务，或者用「等待条件」代替 sleep。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

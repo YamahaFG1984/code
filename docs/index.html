@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>有效软件测试 · 写给开发者的系统化测试指南</title>
+<meta name="description" content="《Effective Software Testing: A Developer's Guide》的中文学习笔记：11 章 + 附录，大量图解，每个示例都有 Java、Python、TypeScript 三种写法。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="0">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<div class="hero">
+  <span class="chapter-eyebrow">面向初学者的 11 章 + 附录</span>
+  <h1>有效软件测试：写给开发者的系统化测试指南</h1>
+  <p class="sub">
+    这套教程整理自 Maurício Aniche 的《Effective Software Testing: A Developer's Guide》（Manning，2022）及其配套代码仓库。
+    原书的知识骨架被完整保留 —— 规格测试、边界、覆盖率、契约、属性测试、Mock、可测试性设计、TDD、大测试、测试代码质量 ——
+    用中文重新讲解，配上大量图示，并且<strong>每一个代码示例都给出 Java、Python、TypeScript 三种写法</strong>。
+  </p>
+  <p style="margin-top:14px">
+    <span class="pill">JUnit 5 · pytest · Vitest</span><span class="pill">AssertJ</span><span class="pill">jqwik · Hypothesis · fast-check</span>
+    <span class="pill">Mockito · unittest.mock · vi.fn</span><span class="pill">JaCoCo · coverage.py · v8</span>
+    <span class="pill">PIT · mutmut · Stryker</span><span class="pill">Selenium · Playwright</span>
+  </p>
+</div>
+
+<h2 id="why">为什么要「系统化」地测试？</h2>
+
+<p>
+  如今没有人再争论测试是否重要，开发者也都会用 JUnit、pytest 这样的工具。但会用工具，不等于会<strong>设计</strong>测试。
+  大多数人测试时凭直觉：想到什么测什么。结果是 —— 两个开发者对同一段代码写出完全不同的测试，而 Bug 恰好藏在两个人都没想到的地方。
+</p>
+<p>
+  这本书的核心主张是：测试可以既<strong>高效</strong>（用最少的力气找到最多的 Bug，每种技术都有明确的起点和终点）又<strong>系统</strong>（换一个人来做，也能推导出差不多的测试集）。
+  把能系统化的部分系统化，把人的创造力留给真正需要它的地方。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 260" role="img" aria-label="凭直觉测试与系统化测试的对比">
+  <rect class="bx-r" x="20" y="20" width="340" height="220" rx="14"/>
+  <text class="ttl on-r" x="190" y="48" text-anchor="middle">凭直觉</text>
+  <rect class="bx-d" x="50" y="66" width="280" height="130" rx="10"/>
+  <circle class="bx-a" cx="100" cy="110" r="7"/><circle class="bx-a" cx="120" cy="120" r="7"/><circle class="bx-a" cx="110" cy="140" r="7"/>
+  <circle class="bx-a" cx="130" cy="100" r="7"/>
+  <circle class="bx-r" cx="280" cy="170" r="9"/><text class="sm on-r" x="280" y="152" text-anchor="middle">Bug</text>
+  <circle class="bx-r" cx="250" cy="90" r="9"/><text class="sm on-r" x="250" y="76" text-anchor="middle">Bug</text>
+  <text class="lbl" x="190" y="220" text-anchor="middle">测试扎堆在「想得到」的地方</text>
+
+  <rect class="bx-g" x="400" y="20" width="340" height="220" rx="14"/>
+  <text class="ttl on-g" x="570" y="48" text-anchor="middle">系统化</text>
+  <rect class="bx-d" x="430" y="66" width="280" height="130" rx="10"/>
+  <path class="ln" d="M523 66 V196"/><path class="ln" d="M616 66 V196"/><path class="ln" d="M430 131 H710"/>
+  <circle class="bx-a" cx="476" cy="98" r="7"/><circle class="bx-a" cx="569" cy="98" r="7"/><circle class="bx-a" cx="662" cy="98" r="7"/>
+  <circle class="bx-a" cx="476" cy="164" r="7"/><circle class="bx-a" cx="569" cy="164" r="7"/><circle class="bx-a" cx="662" cy="164" r="7"/>
+  <circle class="bx-a" cx="523" cy="131" r="5"/><circle class="bx-a" cx="616" cy="131" r="5"/>
+  <circle class="bx-g" cx="660" cy="174" r="9"/><text class="sm on-g" x="690" y="184">✔</text>
+  <circle class="bx-g" cx="630" cy="90" r="9"/><text class="sm on-g" x="648" y="84">✔</text>
+  <text class="lbl" x="570" y="220" text-anchor="middle">每个分区、每条边界都有代表</text>
+</svg>
+<figcaption>图 0-1　凭直觉的测试扎堆在熟悉的地方；系统化的测试覆盖每个分区和边界（包括边界上的点）</figcaption>
+</figure>
+
+<h2 id="map">全书路线图</h2>
+
+<p>作者提出了一个开发者的工作流：左边是「用测试引导开发」，帮你写出有信心、可测试的代码；右边是「高效而系统地测试」，从多个角度检验实现、找出 Bug。两边来回迭代：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 320" role="img" aria-label="全书路线图：每个技术对应的章节">
+  <rect class="bx-d" x="14" y="14" width="330" height="292" rx="14"/>
+  <text class="ttl" x="30" y="40">用测试引导开发</text>
+  <a href="ch08.html"><rect class="bx-a" x="34" y="56" width="140" height="48" rx="8"/><text class="lbl on-a" x="104" y="78" text-anchor="middle">测试驱动开发</text><text class="sm" x="104" y="95" text-anchor="middle">第 8 章</text></a>
+  <a href="ch07.html"><rect class="bx-a" x="186" y="56" width="140" height="48" rx="8"/><text class="lbl on-a" x="256" y="78" text-anchor="middle">为可测试性设计</text><text class="sm" x="256" y="95" text-anchor="middle">第 7 章</text></a>
+  <a href="ch04.html"><rect class="bx-a" x="34" y="116" width="140" height="48" rx="8"/><text class="lbl on-a" x="104" y="138" text-anchor="middle">契约式设计</text><text class="sm" x="104" y="155" text-anchor="middle">第 4 章</text></a>
+  <a href="ch06.html"><rect class="bx" x="186" y="116" width="140" height="48" rx="8"/><text class="lbl" x="256" y="138" text-anchor="middle">Mock 与 Stub</text><text class="sm" x="256" y="155" text-anchor="middle">第 6 章</text></a>
+  <a href="ch10.html"><rect class="bx-p" x="34" y="180" width="292" height="48" rx="8"/><text class="lbl on-p" x="180" y="202" text-anchor="middle">自动化测试套件 · 测试代码质量</text><text class="sm" x="180" y="219" text-anchor="middle">第 10 章</text></a>
+  <a href="ch01.html"><rect class="bx" x="34" y="244" width="292" height="48" rx="8"/><text class="lbl" x="180" y="266" text-anchor="middle">为什么测试 · 测试原则 · 测试金字塔</text><text class="sm" x="180" y="283" text-anchor="middle">第 1 章</text></a>
+
+  <rect class="bx-d" x="414" y="14" width="332" height="292" rx="14"/>
+  <text class="ttl" x="430" y="40">高效而系统地测试</text>
+  <a href="ch02.html"><rect class="bx-b" x="430" y="56" width="148" height="48" rx="8"/><text class="lbl on-b" x="504" y="78" text-anchor="middle">规格测试 · 边界</text><text class="sm" x="504" y="95" text-anchor="middle">第 2 章</text></a>
+  <a href="ch03.html"><rect class="bx-b" x="586" y="56" width="148" height="48" rx="8"/><text class="lbl on-b" x="660" y="78" text-anchor="middle">结构化测试</text><text class="sm" x="660" y="95" text-anchor="middle">第 3 章</text></a>
+  <a href="ch05.html"><rect class="bx-p" x="430" y="116" width="148" height="48" rx="8"/><text class="lbl on-p" x="504" y="138" text-anchor="middle">属性测试</text><text class="sm" x="504" y="155" text-anchor="middle">第 5 章</text></a>
+  <a href="ch03.html"><rect class="bx-p" x="586" y="116" width="148" height="48" rx="8"/><text class="lbl on-p" x="660" y="138" text-anchor="middle">变异测试</text><text class="sm" x="660" y="155" text-anchor="middle">第 3 章</text></a>
+  <a href="ch09.html"><rect class="bx-g" x="430" y="180" width="148" height="48" rx="8"/><text class="lbl on-g" x="504" y="202" text-anchor="middle">集成测试（SQL）</text><text class="sm" x="504" y="219" text-anchor="middle">第 9 章</text></a>
+  <a href="ch09.html"><rect class="bx-g" x="586" y="180" width="148" height="48" rx="8"/><text class="lbl on-g" x="660" y="202" text-anchor="middle">系统测试（Web）</text><text class="sm" x="660" y="219" text-anchor="middle">第 9 章</text></a>
+  <a href="ch11.html"><rect class="bx" x="430" y="244" width="304" height="48" rx="8"/><text class="lbl" x="582" y="266" text-anchor="middle">把一切串起来 · 接下来学什么</text><text class="sm" x="582" y="283" text-anchor="middle">第 11 章</text></a>
+
+  <path class="ln-a" d="M346 110 C375 90 385 90 412 110" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M412 210 C385 230 375 230 346 210" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="380" y="156" text-anchor="middle">来回</text>
+  <text class="sm on-a" x="380" y="172" text-anchor="middle">迭代</text>
+</svg>
+<figcaption>图 0-2　全书路线图（图中方块可点击跳转）</figcaption>
+</figure>
+
+<h2 id="who">这套教程写给谁</h2>
+
+<ul>
+  <li><strong>会写代码、但测试全凭感觉</strong>的开发者。每章从「为什么需要这个技术」讲起，再一步步演示怎么用。</li>
+  <li><strong>用 Python 或 TypeScript、不写 Java</strong> 的人。原书全是 Java，这里每个示例都有另外两种语言的地道写法，工具也换成了对应生态里的主流选择。</li>
+  <li><strong>已经在写测试、想更进一步</strong>的人：MC/DC、变异测试、属性测试、有状态测试、页面对象、测试异味……这些主题平时很少被系统地讲清楚。</li>
+</ul>
+
+<div class="box note">
+  <div class="t">&#9432; 需要什么前置知识</div>
+  <p>能读懂 Java、Python、TypeScript 中任意一种的基础语法就够了。从没写过自动化测试？先看<a href="appendix.html">附录 A：JUnit 5 入门</a>，十分钟上手 JUnit / pytest / Vitest。</p>
+</div>
+
+<h2 id="how">怎么用这套教程</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128209;</span><h4>切换语言</h4><p>每个代码块上方都有 <strong>Java / Python / TypeScript</strong> 标签。点任意一个，整页所有代码块都会切换，并记住你的选择。</p></div>
+  <div class="card"><span class="ic">&#128506;</span><h4>先看图</h4><p>每一章都有大量图示。卡住的时候，先看图把概念弄清楚，再回来读代码。</p></div>
+  <div class="card"><span class="ic">&#9997;</span><h4>亲手敲</h4><p>每章末尾有「自测练习」（附书中答案，点开查看）和「动手练习」。看懂和写出来之间的差距，比你想象的大。</p></div>
+  <div class="card"><span class="ic">&#128421;</span><h4>跑仓库代码</h4><p>仓库里每章一个独立的 Maven 项目（<code>ch1</code> … <code>ch10</code>、<code>intro-to-junit</code>），进入目录运行 <code>mvn test</code> 即可。</p></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 关于 Python 和 TypeScript 示例</div>
+  <p>
+    Python 示例使用 pytest、Hypothesis、unittest.mock、pytest-playwright；TypeScript 示例使用 Vitest、fast-check、@playwright/test，数据库示例使用 SQLite（Python 的 <code>sqlite3</code>、Node 22+ 的 <code>node:sqlite</code>）。
+    这些示例在编写本教程时都实际运行过：在 Python 3.12 + Hypothesis 6 和 Node 24 + Vitest + fast-check 4 下通过，Web 测试针对仓库中的 PetClinic jar 实际跑过。
+    个别地方，不同语言的行为会不同（比如字符串的对象身份、NaN 的生成、日期的月份从 0 开始），页面里都专门做了说明。
+  </p>
+</div>
+
+<h2 id="toc">全部章节</h2>
+<div id="toc-grid"></div>
+
+<h2 id="credits">来源与许可</h2>
+<p>
+  本教程是对 Maurício Aniche《Effective Software Testing: A Developer's Guide》（Manning Publications，2022）的学习整理，概念、例子和习题均来自原书，
+  Java 代码来自书的配套仓库（<a href="https://github.com/effective-software-testing/code">effective-software-testing/code</a>）。
+  按照仓库 README 的要求：复用其中的代码时，请始终明确注明本书为出处。想深入学习，强烈推荐阅读原书。
+</p>
+
+<div class="box key" style="margin-top:32px">
+  <div class="t">&#128273; 一句话总结</div>
+  <p>
+    如果你只记住一件事：<strong>测试的难点不在于写 JUnit 代码，而在于设计出能发现 Bug 的用例。</strong>
+    这套教程剩下的 11 章，都是在教你如何系统地做到这一点。
+  </p>
+</div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

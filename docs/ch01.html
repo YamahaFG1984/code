@@ -1,0 +1,1224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 1 章 · 高效而系统的软件测试 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="1">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 1 章</span>
+<h1>高效而系统的软件测试</h1>
+<p class="lede">
+  两个同样优秀的开发者，写了一模一样的代码。一个周五晚上被叫回公司修 Bug，另一个安心过了周末。
+  区别不在于谁更聪明，而在于谁用了<strong>系统化</strong>的方法去测试。这一章从这个故事讲起，
+  然后解释为什么测试天生就难，以及该把力气花在哪一层测试上。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>通过一个真实感很强的例子，理解「凭感觉测」和「系统地测」的差别</li>
+    <li>看清一个开发者从拿到需求到放心上线，中间会用到哪些测试技术</li>
+    <li>记住软件测试的七条原则 —— 它们解释了为什么「没有 Bug 的软件」不存在</li>
+    <li>分清单元测试、集成测试、系统测试，理解测试金字塔</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="story">一个故事：测试的人和不测试的人</h2>
+
+<p>
+  先认识一下故事的背景。敏捷团队常用一种叫<strong>计划扑克（Planning Poker）</strong>的方式来估算工作量：
+  大家讨论完一个功能后，每个人同时亮出自己的估算点数。点数越大，代表觉得越费劲。
+  然后<em>估得最低</em>和<em>估得最高</em>的两个人要站出来讲讲理由，大家再讨论、再估，直到意见接近。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="计划扑克：四个开发者亮出估算，最低和最高的两位要发言">
+  <text class="sm" x="20" y="24">每个人亮出自己的估算点数</text>
+  <rect class="bx" x="20"  y="40" width="120" height="84" rx="10"/>
+  <text class="lbl" x="80" y="64" text-anchor="middle">Ted</text>
+  <text class="ttl" x="80" y="102" text-anchor="middle" style="font-size:26px">16</text>
+  <rect class="bx" x="156" y="40" width="120" height="84" rx="10"/>
+  <text class="lbl" x="216" y="64" text-anchor="middle">Barney</text>
+  <text class="ttl" x="216" y="102" text-anchor="middle" style="font-size:26px">8</text>
+  <rect class="bx" x="292" y="40" width="120" height="84" rx="10"/>
+  <text class="lbl" x="352" y="64" text-anchor="middle">Lily</text>
+  <text class="ttl" x="352" y="102" text-anchor="middle" style="font-size:26px">2</text>
+  <rect class="bx" x="428" y="40" width="120" height="84" rx="10"/>
+  <text class="lbl" x="488" y="64" text-anchor="middle">Robin</text>
+  <text class="ttl" x="488" y="102" text-anchor="middle" style="font-size:26px">4</text>
+
+  <path class="ln-a" d="M552 82 H600" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="606" y="40" width="140" height="84" rx="10"/>
+  <text class="ttl on-a" x="676" y="70" text-anchor="middle">identifyExtremes</text>
+  <text class="sm" x="676" y="92" text-anchor="middle">找出最低和最高</text>
+  <text class="sm" x="676" y="108" text-anchor="middle">的两个人</text>
+
+  <path class="ln-a" d="M676 126 V160" marker-end="url(#ar-a)"/>
+  <rect class="bx-g" x="496" y="164" width="250" height="36" rx="8"/>
+  <text class="lbl on-g" x="621" y="187" text-anchor="middle">Lily（最低 2）和 Ted（最高 16）发言</text>
+</svg>
+<figcaption>图 1-1　我们要实现的方法：输入一组估算，输出估得最低和最高的两位开发者</figcaption>
+</figure>
+
+<p>John 要实现的核心方法很简单：</p>
+
+<div class="tw">
+<table>
+  <tr><th>方法</th><td><code>identifyExtremes</code></td></tr>
+  <tr><th>输入</th><td>一个 <code>Estimate</code> 列表，每个元素包含开发者名字和他的估算值</td></tr>
+  <tr><th>输出</th><td>一个字符串列表：估得最低的人的名字 + 估得最高的人的名字</td></tr>
+</table>
+</div>
+
+<h3>John 的版本：写完、手动点两下、上线</h3>
+
+<p>几分钟后，John 写出了下面的代码。逻辑很直接：遍历列表，一边走一边记录「目前见过的最高」和「目前见过的最低」。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPokerByJohn.java"><pre>
+public class PlanningPoker {
+  public List&lt;String&gt; identifyExtremes(List&lt;Estimate&gt; estimates) {
+    Estimate lowestEstimate = null;    // 目前见过的最低估算
+    Estimate highestEstimate = null;   // 目前见过的最高估算
+
+    for (Estimate estimate : estimates) {
+      if (highestEstimate == null ||
+          estimate.getEstimate() &gt; highestEstimate.getEstimate()) {
+        highestEstimate = estimate;
+      }
+      else if (lowestEstimate == null ||      // ← 注意这个 else
+          estimate.getEstimate() &lt; lowestEstimate.getEstimate()) {
+        lowestEstimate = estimate;
+      }
+    }
+
+    return Arrays.asList(
+        lowestEstimate.getDeveloper(),
+        highestEstimate.getDeveloper());
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="planning_poker.py"><pre>
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Estimate:
+    developer: str
+    estimate: int
+
+def identify_extremes(estimates: list[Estimate]) -&gt; list[str]:
+    lowest = None    # 目前见过的最低估算
+    highest = None   # 目前见过的最高估算
+
+    for e in estimates:
+        if highest is None or e.estimate &gt; highest.estimate:
+            highest = e
+        elif lowest is None or e.estimate &lt; lowest.estimate:   # ← 注意这个 elif
+            lowest = e
+
+    return [lowest.developer, highest.developer]
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.ts"><pre>
+export interface Estimate {
+  developer: string;
+  estimate: number;
+}
+
+export function identifyExtremes(estimates: Estimate[]): string[] {
+  let lowest: Estimate | null = null;    // 目前见过的最低估算
+  let highest: Estimate | null = null;   // 目前见过的最高估算
+
+  for (const e of estimates) {
+    if (highest === null || e.estimate &gt; highest.estimate) {
+      highest = e;
+    } else if (lowest === null || e.estimate &lt; lowest.estimate) {  // ← 注意这个 else
+      lowest = e;
+    }
+  }
+
+  return [lowest!.developer, highest!.developer];
+}
+</pre></div>
+</div>
+
+<p>
+  John 不写自动化测试。他打开程序，输入了图 1-1 里那组数据（16、8、2、4），结果正确：Lily 和 Ted。
+  他很满意，推送代码，自动部署，下班。<strong>不到一个小时</strong>，客服就开始收到愤怒的邮件。
+</p>
+
+<p>你能在代码里找到问题吗？提示：试试把估算按<strong>从小到大</strong>的顺序输入。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="逐步追踪 John 的循环：升序输入时 lowest 永远不会被赋值">
+  <text class="ttl" x="20" y="24">输入：Ross 2 → Phoebe 4 → Monica 8 → Chandler 16（恰好升序）</text>
+
+  <text class="sm" x="20" y="58">循环</text>
+  <text class="sm" x="120" y="58">当前元素</text>
+  <text class="sm" x="270" y="58">第一个 if（比最高还高？）</text>
+  <text class="sm" x="480" y="58">else if 还有机会执行吗？</text>
+  <text class="sm" x="660" y="58">lowest</text>
+
+  <rect class="bx" x="20" y="68" width="720" height="40" rx="6"/>
+  <text class="lbl" x="30" y="93">第 1 轮</text>
+  <text class="mono" x="120" y="93">Ross 2</text>
+  <text class="lbl on-g" x="270" y="93">highest 是 null → 进入 ✔</text>
+  <text class="lbl on-r" x="480" y="93">不会，被 else 跳过</text>
+  <text class="mono on-r" x="660" y="93">null</text>
+
+  <rect class="bx" x="20" y="114" width="720" height="40" rx="6"/>
+  <text class="lbl" x="30" y="139">第 2 轮</text>
+  <text class="mono" x="120" y="139">Phoebe 4</text>
+  <text class="lbl on-g" x="270" y="139">4 &gt; 2 → 进入 ✔</text>
+  <text class="lbl on-r" x="480" y="139">不会，被 else 跳过</text>
+  <text class="mono on-r" x="660" y="139">null</text>
+
+  <rect class="bx" x="20" y="160" width="720" height="40" rx="6"/>
+  <text class="lbl" x="30" y="185">第 3 轮</text>
+  <text class="mono" x="120" y="185">Monica 8</text>
+  <text class="lbl on-g" x="270" y="185">8 &gt; 4 → 进入 ✔</text>
+  <text class="lbl on-r" x="480" y="185">不会，被 else 跳过</text>
+  <text class="mono on-r" x="660" y="185">null</text>
+
+  <rect class="bx" x="20" y="206" width="720" height="40" rx="6"/>
+  <text class="lbl" x="30" y="231">第 4 轮</text>
+  <text class="mono" x="120" y="231">Chandler 16</text>
+  <text class="lbl on-g" x="270" y="231">16 &gt; 8 → 进入 ✔</text>
+  <text class="lbl on-r" x="480" y="231">不会，被 else 跳过</text>
+  <text class="mono on-r" x="660" y="231">null</text>
+
+  <rect class="bx-r" x="170" y="258" width="420" height="34" rx="8"/>
+  <text class="ttl on-r" x="380" y="280" text-anchor="middle">lowest.getDeveloper() → 空指针异常 💥</text>
+</svg>
+<figcaption>图 1-2　逐轮追踪：输入升序时，第一个 if 每次都成立，else 分支永远轮不到，lowest 始终是 null</figcaption>
+</figure>
+
+<p>
+  罪魁祸首就是那个不起眼的 <code>else</code>。「更新最高」和「更新最低」本来是两件独立的事，
+  用 <code>else</code> 连起来，就变成了「如果更新了最高，就不许更新最低」。修复只需要把 <code>else if</code> 改成 <code>if</code>：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="修复：两个独立的 if"><pre>
+if (highestEstimate == null ||
+    estimate.getEstimate() &gt; highestEstimate.getEstimate()) {
+  highestEstimate = estimate;
+}
+if (lowestEstimate == null ||        // 原来是 else if
+    estimate.getEstimate() &lt; lowestEstimate.getEstimate()) {
+  lowestEstimate = estimate;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="修复：两个独立的 if"><pre>
+if highest is None or e.estimate &gt; highest.estimate:
+    highest = e
+if lowest is None or e.estimate &lt; lowest.estimate:   # 原来是 elif
+    lowest = e
+</pre></div>
+<div class="code" data-lang="ts" data-file="修复：两个独立的 if"><pre>
+if (highest === null || e.estimate &gt; highest.estimate) {
+  highest = e;
+}
+if (lowest === null || e.estimate &lt; lowest.estimate) {   // 原来是 else if
+  lowest = e;
+}
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 「这么简单的 Bug，我才不会犯」</div>
+  <p>
+    也许吧。但真实代码比这复杂得多，人很难同时记住所有可能发生的情况。
+    Bug 出现不是因为我们是差劲的程序员，而是因为我们在写复杂的东西 —— 而计算机比人精确得多。
+    John 其实是个很好的开发者，他缺的是两样东西：<strong>一套系统的方法来推导测试用例</strong>（少遗漏情况），
+    以及<strong>测试自动化</strong>（不用每次手动点）。
+  </p>
+</div>
+
+<h3>Eleanor 的版本：像对着清单一样测试</h3>
+
+<p>
+  现在把故事重放一遍，主角换成 Eleanor。她写了<em>一模一样</em>的有 Bug 的代码。
+  但她不急着上线，而是先思考这个方法的<strong>输入</strong>：一个列表。
+  她知道，只要输入是列表，就有一组「必考题」：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="Eleanor 针对列表输入的测试清单">
+  <rect class="bx-a" x="290" y="12" width="180" height="44" rx="10"/>
+  <text class="ttl on-a" x="380" y="40" text-anchor="middle">输入是一个列表</text>
+
+  <path class="ln" d="M380 56 V74 H80 V92"/>
+  <path class="ln" d="M380 74 H680 V92"/>
+  <path class="ln" d="M230 74 V92"/>
+  <path class="ln" d="M380 74 V92"/>
+  <path class="ln" d="M530 74 V92"/>
+
+  <rect class="bx-r" x="20"  y="94" width="120" height="58" rx="8"/>
+  <text class="ttl on-r" x="80" y="118" text-anchor="middle">null</text>
+  <text class="sm" x="80" y="138" text-anchor="middle">拒绝，抛异常</text>
+  <rect class="bx-r" x="170" y="94" width="120" height="58" rx="8"/>
+  <text class="ttl on-r" x="230" y="118" text-anchor="middle">空列表</text>
+  <text class="sm" x="230" y="138" text-anchor="middle">拒绝，抛异常</text>
+  <rect class="bx-r" x="320" y="94" width="120" height="58" rx="8"/>
+  <text class="ttl on-r" x="380" y="118" text-anchor="middle">1 个元素</text>
+  <text class="sm" x="380" y="138" text-anchor="middle">拒绝，抛异常</text>
+  <rect class="bx-g" x="470" y="94" width="120" height="58" rx="8"/>
+  <text class="ttl on-g" x="530" y="118" text-anchor="middle">2 个元素</text>
+  <text class="sm" x="530" y="138" text-anchor="middle">最小的合法输入</text>
+  <rect class="bx-g" x="620" y="94" width="120" height="58" rx="8"/>
+  <text class="ttl on-g" x="680" y="118" text-anchor="middle">很多元素</text>
+  <text class="sm" x="680" y="138" text-anchor="middle">正常情况</text>
+
+  <path class="ln-d" d="M680 154 V176"/>
+  <path class="ln-d" d="M530 176 H680"/>
+  <path class="ln-d" d="M530 176 V194"/>
+  <path class="ln-d" d="M680 176 V194"/>
+  <path class="ln-d" d="M380 176 H530"/>
+  <path class="ln-d" d="M380 176 V194"/>
+
+  <rect class="bx-p" x="310" y="196" width="140" height="46" rx="8"/>
+  <text class="ttl on-p" x="380" y="216" text-anchor="middle">顺序打乱</text>
+  <text class="sm" x="380" y="233" text-anchor="middle">基于属性的测试</text>
+  <rect class="bx-p" x="460" y="196" width="140" height="46" rx="8"/>
+  <text class="ttl on-p" x="530" y="216" text-anchor="middle">有重复值</text>
+  <text class="sm" x="530" y="233" text-anchor="middle">返回先出现的</text>
+  <rect class="bx-p" x="610" y="196" width="140" height="46" rx="8"/>
+  <text class="ttl on-p" x="680" y="216" text-anchor="middle">全部相同</text>
+  <text class="sm" x="680" y="233" text-anchor="middle">返回空列表</text>
+
+  <text class="sm" x="20" y="200">红色：非法输入</text>
+  <text class="sm" x="20" y="218">绿色：合法输入</text>
+  <text class="sm" x="20" y="236">紫色：进一步追问</text>
+</svg>
+<figcaption>图 1-3　对「列表」这种输入，有一套几乎固定的检查清单</figcaption>
+</figure>
+
+<p><strong>第一步：非法输入。</strong>null、空列表、只有一个元素 —— 当前实现遇到这三种都会崩溃。
+Eleanor 思考了这个方法在系统里的位置，决定直接拒绝这类输入，于是先在代码开头加上校验：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPoker.java（开头部分）"><pre>
+public List&lt;String&gt; identifyExtremes(List&lt;Estimate&gt; estimates) {
+  if (estimates == null) {
+    throw new IllegalArgumentException("Estimates can't be null");
+  }
+  if (estimates.size() &lt;= 1) {
+    throw new IllegalArgumentException("There has to be more than 1 estimate in the list");
+  }
+  // ……后面是循环
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="planning_poker.py（开头部分）"><pre>
+def identify_extremes(estimates):
+    if estimates is None:
+        raise ValueError("estimates can't be None")
+    if len(estimates) &lt;= 1:
+        raise ValueError("there has to be more than 1 estimate in the list")
+    # ……后面是循环
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.ts（开头部分）"><pre>
+export function identifyExtremes(estimates: Estimate[] | null): string[] {
+  if (estimates == null) {
+    throw new Error("estimates can't be null");
+  }
+  if (estimates.length &lt;= 1) {
+    throw new Error("there has to be more than 1 estimate in the list");
+  }
+  // ……后面是循环
+}
+</pre></div>
+</div>
+
+<p>
+  代码里已经写得很清楚了，为什么还要写测试？因为测试能<strong>防止回归</strong>：
+  将来某个同事看不懂这几行校验、顺手删掉时，测试会立刻变红提醒他。
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPokerTest.java"><pre>
+public class PlanningPokerTest {
+
+  @Test
+  void rejectNullInput() {
+    assertThatThrownBy(() -&gt; new PlanningPoker().identifyExtremes(null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void rejectEmptyList() {
+    assertThatThrownBy(() -&gt; {
+      List&lt;Estimate&gt; emptyList = Collections.emptyList();
+      new PlanningPoker().identifyExtremes(emptyList);
+    }).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void rejectSingleEstimate() {
+    assertThatThrownBy(() -&gt; {
+      List&lt;Estimate&gt; list = Collections.singletonList(new Estimate("Eleanor", 1));
+      new PlanningPoker().identifyExtremes(list);
+    }).isInstanceOf(IllegalArgumentException.class);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_planning_poker.py"><pre>
+import pytest
+from planning_poker import Estimate, identify_extremes
+
+def test_reject_none_input():
+    with pytest.raises(ValueError):
+        identify_extremes(None)
+
+def test_reject_empty_list():
+    with pytest.raises(ValueError):
+        identify_extremes([])
+
+def test_reject_single_estimate():
+    with pytest.raises(ValueError):
+        identify_extremes([Estimate("Eleanor", 1)])
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.test.ts"><pre>
+import { describe, test, expect } from "vitest";
+import { identifyExtremes } from "./planningPoker";
+
+describe("identifyExtremes", () =&gt; {
+  test("rejects null input", () =&gt; {
+    expect(() =&gt; identifyExtremes(null)).toThrow();
+  });
+
+  test("rejects empty list", () =&gt; {
+    expect(() =&gt; identifyExtremes([])).toThrow();
+  });
+
+  test("rejects single estimate", () =&gt; {
+    expect(() =&gt; identifyExtremes([{ developer: "Eleanor", estimate: 1 }])).toThrow();
+  });
+});
+</pre></div>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 读懂「期待异常」的测试</div>
+  <p>
+    这类测试是「倒过来」的：<strong>抛出了指定异常才算通过</strong>，没抛反而失败。
+    Java 里 <code>() -&gt; …</code> 是一段 lambda（一小段待执行的代码），<code>assertThatThrownBy</code> 执行它并检查异常类型；
+    Python 用 <code>with pytest.raises(...)</code> 包住会出错的代码；Vitest 则是把函数交给 <code>expect(...).toThrow()</code>。
+    三种写法，同一个意思。
+  </p>
+</div>
+
+<p><strong>第二步：正常输入。</strong>两个元素是方法应该能工作的<em>最小</em>输入，1 个和 2 个之间正好是「不行」和「行」的分界线。
+Eleanor 知道 <strong>Bug 最爱藏在边界上</strong>，所以专门为它写一个测试，再写一个多元素的测试：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPokerTest.java"><pre>
+@Test
+void twoEstimates() {
+  List&lt;Estimate&gt; list = Arrays.asList(
+      new Estimate("Mauricio", 10),
+      new Estimate("Frank", 5));
+
+  List&lt;String&gt; devs = new PlanningPoker().identifyExtremes(list);
+
+  assertThat(devs).containsExactlyInAnyOrder("Mauricio", "Frank");
+}
+
+@Test
+void manyEstimates() {
+  List&lt;Estimate&gt; list = Arrays.asList(
+      new Estimate("Mauricio", 10),
+      new Estimate("Arie", 5),
+      new Estimate("Frank", 7));
+
+  List&lt;String&gt; devs = new PlanningPoker().identifyExtremes(list);
+
+  assertThat(devs).containsExactlyInAnyOrder("Mauricio", "Arie");
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_planning_poker.py"><pre>
+def test_two_estimates():
+    devs = identify_extremes([Estimate("Mauricio", 10), Estimate("Frank", 5)])
+    assert sorted(devs) == ["Frank", "Mauricio"]   # 不关心顺序，排序后再比
+
+def test_many_estimates():
+    devs = identify_extremes([
+        Estimate("Mauricio", 10),
+        Estimate("Arie", 5),
+        Estimate("Frank", 7),
+    ])
+    assert sorted(devs) == ["Arie", "Mauricio"]
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.test.ts"><pre>
+test("two estimates", () =&gt; {
+  const devs = identifyExtremes([
+    { developer: "Mauricio", estimate: 10 },
+    { developer: "Frank", estimate: 5 },
+  ]);
+  expect([...devs].sort()).toEqual(["Frank", "Mauricio"]);  // 不关心顺序
+});
+
+test("many estimates", () =&gt; {
+  const devs = identifyExtremes([
+    { developer: "Mauricio", estimate: 10 },
+    { developer: "Arie", estimate: 5 },
+    { developer: "Frank", estimate: 7 },
+  ]);
+  expect([...devs].sort()).toEqual(["Arie", "Mauricio"]);
+});
+</pre></div>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 五个测试全绿，Bug 还在</div>
+  <p>
+    注意：此时 Eleanor 有五个通过的测试，但那个 <code>else</code> 的 Bug 依然存在！
+    因为她挑的输入恰好不是升序。<strong>测试全部通过 ≠ 没有 Bug</strong>，这是整本书反复出现的主题。
+  </p>
+</div>
+
+<p><strong>第三步：顺序。</strong>Eleanor 知道，只要输入是列表，元素的顺序就可能影响算法。
+她不去手挑「某一种顺序」，而是写了一个<strong>基于属性的测试（property-based test）</strong>：
+让框架随机生成大量列表，塞进一个已知的最低值（1）和最高值（100），打乱顺序，然后断言结果<em>永远</em>是这两个人。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPokerTest.java（jqwik）"><pre>
+@Property   // jqwik：默认用 100 组随机数据运行这个测试
+void estimatesInAnyOrder(@ForAll("estimates") List&lt;Estimate&gt; estimates) {
+  estimates.add(new Estimate("MrLowEstimate", 1));
+  estimates.add(new Estimate("MsHighEstimate", 100));
+  Collections.shuffle(estimates);            // 打乱，让顺序无关紧要
+
+  List&lt;String&gt; dev = new PlanningPoker().identifyExtremes(estimates);
+
+  assertThat(dev).containsExactlyInAnyOrder("MrLowEstimate", "MsHighEstimate");
+}
+
+@Provide     // 告诉 jqwik 如何生成随机的估算列表
+Arbitrary&lt;List&lt;Estimate&gt;&gt; estimates() {
+  Arbitrary&lt;String&gt; names = Arbitraries.strings().withCharRange('a', 'z').ofLength(5);
+  Arbitrary&lt;Integer&gt; values = Arbitraries.integers().between(2, 99);
+
+  Arbitrary&lt;Estimate&gt; estimates = Combinators.combine(names, values)
+      .as((name, value) -&gt; new Estimate(name, value));
+
+  return estimates.list().ofMinSize(1);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_planning_poker.py（Hypothesis）"><pre>
+from hypothesis import given, strategies as st
+
+names = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=5, max_size=5)
+values = st.integers(min_value=2, max_value=99)
+estimate_lists = st.lists(st.builds(Estimate, names, values), min_size=1)
+
+@given(estimate_lists, st.randoms())   # Hypothesis：默认跑 100 组随机数据
+def test_estimates_in_any_order(estimates, rnd):
+    estimates = estimates + [Estimate("MrLowEstimate", 1),
+                             Estimate("MsHighEstimate", 100)]
+    rnd.shuffle(estimates)             # 用框架提供的随机源打乱，失败时可复现
+
+    devs = identify_extremes(estimates)
+
+    assert sorted(devs) == ["MrLowEstimate", "MsHighEstimate"]
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.test.ts（fast-check）"><pre>
+import fc from "fast-check";
+
+const estimateArb = fc.record({
+  developer: fc.stringMatching(/^[a-z]{5}$/),
+  estimate: fc.integer({ min: 2, max: 99 }),
+});
+
+// 先生成列表，加入最低/最高两位，再生成它的一个随机排列
+const shuffledWithExtremes = fc
+  .array(estimateArb, { minLength: 1 })
+  .chain((list) =&gt; {
+    const all = [...list,
+      { developer: "MrLowEstimate", estimate: 1 },
+      { developer: "MsHighEstimate", estimate: 100 }];
+    return fc.shuffledSubarray(all, { minLength: all.length });
+  });
+
+test("estimates in any order", () =&gt; {
+  fc.assert(                       // fast-check：默认跑 100 组随机数据
+    fc.property(shuffledWithExtremes, (estimates) =&gt; {
+      const devs = identifyExtremes(estimates);
+      expect([...devs].sort()).toEqual(["MrLowEstimate", "MsHighEstimate"]);
+    })
+  );
+});
+</pre></div>
+</div>
+
+<p>
+  让 Eleanor 惊讶的是：这个测试<strong>失败了</strong>！框架还贴心地报告了导致失败的那组输入。
+  顺着它，她找到了那个 <code>else</code>，改成 <code>if</code>，测试通过。
+  这个随机测试覆盖了 <code>manyEstimates</code> 的场景，她于是删掉了后者（保不保留是个人选择 —— 简单的例子测试更容易看懂）。
+</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 属性测试是怎么「找到」Bug 的？</div>
+  <p>
+    例子测试（example-based）是你挑一个具体输入；属性测试是你描述一个<strong>对所有输入都成立的规律</strong>
+    （这里是「不管顺序如何，最低和最高的人一定被选出」），然后框架去生成成百上千个输入来<em>试图推翻它</em>。
+    只要随机数据里出现了「升序」这种排列，Bug 就会暴露。第 5 章会专门讲这个技术。
+  </p>
+</div>
+
+<p><strong>第四步：重复值。</strong>列表里还可能有重复元素 —— 几个人给出了同样的估算。
+Eleanor 和产品负责人商量后决定：<em>返回先出现的那位</em>。现有实现恰好已经是这样，但她仍然写了一个测试把这个行为「钉住」。</p>
+
+<p><strong>第五步：全部相同。</strong>如果<em>每个人</em>估的都一样呢？产品负责人也没想到这种情况，最后决定返回空列表 ——
+没有分歧，就没人需要发言。Eleanor 在代码末尾加了一个判断：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPoker.java（最终版）"><pre>
+public List&lt;String&gt; identifyExtremes(List&lt;Estimate&gt; estimates) {
+  if (estimates == null) {
+    throw new IllegalArgumentException("Estimates can't be null");
+  }
+  if (estimates.size() &lt;= 1) {
+    throw new IllegalArgumentException("There has to be more than 1 estimate in the list");
+  }
+
+  Estimate lowestEstimate = null;
+  Estimate highestEstimate = null;
+
+  for (Estimate estimate : estimates) {
+    if (highestEstimate == null ||
+        estimate.getEstimate() &gt; highestEstimate.getEstimate()) {
+      highestEstimate = estimate;
+    }
+    if (lowestEstimate == null ||
+        estimate.getEstimate() &lt; lowestEstimate.getEstimate()) {
+      lowestEstimate = estimate;
+    }
+  }
+
+  // 最低和最高是同一个对象 → 所有人估算相同
+  if (lowestEstimate.equals(highestEstimate))
+    return Collections.emptyList();
+
+  return Arrays.asList(
+      lowestEstimate.getDeveloper(),
+      highestEstimate.getDeveloper());
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="planning_poker.py（最终版）"><pre>
+def identify_extremes(estimates: list[Estimate]) -&gt; list[str]:
+    if estimates is None:
+        raise ValueError("estimates can't be None")
+    if len(estimates) &lt;= 1:
+        raise ValueError("there has to be more than 1 estimate in the list")
+
+    lowest = None
+    highest = None
+    for e in estimates:
+        if highest is None or e.estimate &gt; highest.estimate:
+            highest = e
+        if lowest is None or e.estimate &lt; lowest.estimate:
+            lowest = e
+
+    # 最低和最高是同一个元素 → 所有人估算相同
+    if lowest is highest:
+        return []
+
+    return [lowest.developer, highest.developer]
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.ts（最终版）"><pre>
+export function identifyExtremes(estimates: Estimate[] | null): string[] {
+  if (estimates == null) {
+    throw new Error("estimates can't be null");
+  }
+  if (estimates.length &lt;= 1) {
+    throw new Error("there has to be more than 1 estimate in the list");
+  }
+
+  let lowest: Estimate | null = null;
+  let highest: Estimate | null = null;
+  for (const e of estimates) {
+    if (highest === null || e.estimate &gt; highest.estimate) highest = e;
+    if (lowest === null || e.estimate &lt; lowest.estimate) lowest = e;
+  }
+
+  // 最低和最高是同一个元素 → 所有人估算相同
+  if (lowest === highest) return [];
+
+  return [lowest!.developer, highest!.developer];
+}
+</pre></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch1/PlanningPokerTest.java"><pre>
+@Test
+void developersWithSameEstimates() {
+  List&lt;Estimate&gt; list = Arrays.asList(
+      new Estimate("Mauricio", 10),
+      new Estimate("Arie", 5),
+      new Estimate("Andy", 10),
+      new Estimate("Frank", 7),
+      new Estimate("Annibale", 5));
+
+  List&lt;String&gt; devs = new PlanningPoker().identifyExtremes(list);
+
+  // 有并列时，返回先出现的那位
+  assertThat(devs).containsExactlyInAnyOrder("Mauricio", "Arie");
+}
+
+@Test
+void allDevelopersWithTheSameEstimate() {
+  List&lt;Estimate&gt; list = Arrays.asList(
+      new Estimate("Mauricio", 10),
+      new Estimate("Arie", 10),
+      new Estimate("Andy", 10),
+      new Estimate("Frank", 10),
+      new Estimate("Annibale", 10));
+
+  List&lt;String&gt; devs = new PlanningPoker().identifyExtremes(list);
+
+  assertThat(devs).isEmpty();
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_planning_poker.py"><pre>
+def test_developers_with_same_estimates():
+    devs = identify_extremes([
+        Estimate("Mauricio", 10),
+        Estimate("Arie", 5),
+        Estimate("Andy", 10),
+        Estimate("Frank", 7),
+        Estimate("Annibale", 5),
+    ])
+    # 有并列时，返回先出现的那位
+    assert sorted(devs) == ["Arie", "Mauricio"]
+
+def test_all_developers_with_the_same_estimate():
+    devs = identify_extremes([Estimate(name, 10) for name in
+                              ["Mauricio", "Arie", "Andy", "Frank", "Annibale"]])
+    assert devs == []
+</pre></div>
+<div class="code" data-lang="ts" data-file="planningPoker.test.ts"><pre>
+test("developers with same estimates", () =&gt; {
+  const devs = identifyExtremes([
+    { developer: "Mauricio", estimate: 10 },
+    { developer: "Arie", estimate: 5 },
+    { developer: "Andy", estimate: 10 },
+    { developer: "Frank", estimate: 7 },
+    { developer: "Annibale", estimate: 5 },
+  ]);
+  // 有并列时，返回先出现的那位
+  expect([...devs].sort()).toEqual(["Arie", "Mauricio"]);
+});
+
+test("all developers with the same estimate", () =&gt; {
+  const devs = identifyExtremes(
+    ["Mauricio", "Arie", "Andy", "Frank", "Annibale"]
+      .map((developer) =&gt; ({ developer, estimate: 10 })));
+  expect(devs).toEqual([]);
+});
+</pre></div>
+</div>
+
+<p>
+  最后，Eleanor 打开 IDE 自带的<strong>代码覆盖率</strong>工具，确认每一行、每一个分支都被测试执行过（第 3 章会讲）。
+  她推送代码回家。周一早上，监控系统没有报告任何一次崩溃。
+</p>
+
+<h3>两个人的差别，一张图看清</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="John 和 Eleanor 的做法对比">
+  <rect class="bx-r" x="20" y="14" width="340" height="222" rx="12"/>
+  <text class="ttl on-r" x="190" y="42" text-anchor="middle">John：凭直觉</text>
+  <text class="lbl" x="40" y="74">✗ 手动运行程序，试了一两组输入</text>
+  <text class="lbl" x="40" y="100">✗ 想到哪测到哪，没有清单</text>
+  <text class="lbl" x="40" y="126">✗ 没有自动化，下次还得手动点</text>
+  <text class="lbl" x="40" y="152">✗ 没考虑非法输入、重复、全相同</text>
+  <text class="lbl" x="40" y="178">✗ 改了代码不知道有没有改坏别的</text>
+  <text class="ttl on-r" x="190" y="218" text-anchor="middle">结果：周五晚上回公司救火</text>
+
+  <rect class="bx-g" x="400" y="14" width="340" height="222" rx="12"/>
+  <text class="ttl on-g" x="570" y="42" text-anchor="middle">Eleanor：系统化</text>
+  <text class="lbl" x="420" y="74">✔ 从需求拆出输入类型（领域测试）</text>
+  <text class="lbl" x="420" y="100">✔ 专门测 1 和 2 的分界（边界测试）</text>
+  <text class="lbl" x="420" y="126">✔ 用随机输入探索顺序（属性测试）</text>
+  <text class="lbl" x="420" y="152">✔ 明确输入约束（契约）</text>
+  <text class="lbl" x="420" y="178">✔ 用覆盖率检查遗漏（结构化测试）</text>
+  <text class="ttl on-g" x="570" y="218" text-anchor="middle">结果：周末安心，周一零崩溃</text>
+</svg>
+<figcaption>图 1-4　同样的代码，不同的测试方式。右边每一项都是本书的一章</figcaption>
+</figure>
+
+<h2 id="workflow">开发者的高效测试流程</h2>
+
+<p>
+  Eleanor 用到的就是作者所说的「<strong>高效而系统的软件测试</strong>」。
+  她先把需求拆成小块来推导测试用例（<em>领域测试</em>）；然后看代码本身，用覆盖率评估测试是否足够（<em>结构化测试</em>）；
+  大多数用例是挑一个具体数据点（<em>例子测试</em>），某个场景用了<em>属性测试</em>；
+  整个过程中她还不断思考方法的<em>契约</em>（前置条件、后置条件）。
+  下面这张图是全书的路线图：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 420" role="img" aria-label="开发者进行高效系统测试的工作流：先以测试引导开发，再系统地测试以找出 Bug">
+  <!-- 左半：测试引导开发 -->
+  <rect class="bx-d" x="14" y="14" width="330" height="392" rx="14"/>
+  <text class="ttl" x="30" y="40">① 用测试引导开发</text>
+  <text class="sm" x="30" y="58">目标：有信心地把功能写出来，并且写得可测试</text>
+
+  <rect class="bx" x="34" y="76" width="130" height="42" rx="8"/>
+  <text class="lbl" x="99" y="102" text-anchor="middle">需求分析</text>
+  <path class="ln-d" d="M166 97 H194" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="198" y="76" width="130" height="42" rx="8"/>
+  <text class="lbl on-a" x="263" y="96" text-anchor="middle">测试驱动开发</text>
+  <text class="sm" x="263" y="111" text-anchor="middle">第 8 章</text>
+
+  <path class="ln-d" d="M263 120 V150" marker-end="url(#ar)"/>
+  <rect class="bx" x="34" y="154" width="294" height="118" rx="10"/>
+  <text class="lbl" x="181" y="176" text-anchor="middle">由多个职责不同的单元（类、方法）组成</text>
+  <rect class="bx-a" x="50" y="190" width="126" height="64" rx="8"/>
+  <text class="lbl on-a" x="113" y="216" text-anchor="middle">为可测试性设计</text>
+  <text class="sm" x="113" y="236" text-anchor="middle">第 7 章</text>
+  <rect class="bx-a" x="186" y="190" width="126" height="64" rx="8"/>
+  <text class="lbl on-a" x="249" y="216" text-anchor="middle">契约式设计</text>
+  <text class="sm" x="249" y="236" text-anchor="middle">第 4 章</text>
+
+  <rect class="bx-p" x="34" y="296" width="294" height="92" rx="10"/>
+  <text class="ttl on-p" x="181" y="322" text-anchor="middle">自动化测试套件</text>
+  <text class="lbl" x="181" y="346" text-anchor="middle">贯穿始终：测试代码质量</text>
+  <text class="sm" x="181" y="366" text-anchor="middle">第 10 章</text>
+  <path class="ln-d" d="M181 274 V292" marker-end="url(#ar)"/>
+
+  <!-- 中间箭头 -->
+  <path class="ln-a" d="M346 214 H378" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="362" y="204" text-anchor="middle">写完了</text>
+
+  <!-- 右半：系统测试 -->
+  <rect class="bx-d" x="384" y="14" width="362" height="392" rx="14"/>
+  <text class="ttl" x="400" y="40">② 高效而系统地测试</text>
+  <text class="sm" x="400" y="58">目标：从多个角度检验实现，找出 Bug</text>
+
+  <text class="sm" x="400" y="86">单元测试</text>
+  <rect class="bx-b" x="400" y="94" width="104" height="52" rx="8"/>
+  <text class="lbl on-b" x="452" y="116" text-anchor="middle">规格测试</text>
+  <text class="sm" x="452" y="134" text-anchor="middle">第 2 章</text>
+  <rect class="bx-b" x="512" y="94" width="104" height="52" rx="8"/>
+  <text class="lbl on-b" x="564" y="116" text-anchor="middle">边界测试</text>
+  <text class="sm" x="564" y="134" text-anchor="middle">第 2 章</text>
+  <rect class="bx-b" x="624" y="94" width="104" height="52" rx="8"/>
+  <text class="lbl on-b" x="676" y="116" text-anchor="middle">结构化测试</text>
+  <text class="sm" x="676" y="134" text-anchor="middle">第 3 章</text>
+
+  <text class="sm" x="400" y="174">更大的测试</text>
+  <rect class="bx-g" x="400" y="182" width="160" height="52" rx="8"/>
+  <text class="lbl on-g" x="480" y="204" text-anchor="middle">集成测试</text>
+  <text class="sm" x="480" y="222" text-anchor="middle">第 9 章</text>
+  <rect class="bx-g" x="568" y="182" width="160" height="52" rx="8"/>
+  <text class="lbl on-g" x="648" y="204" text-anchor="middle">系统测试</text>
+  <text class="sm" x="648" y="222" text-anchor="middle">第 9 章</text>
+
+  <text class="sm" x="400" y="262">智能测试</text>
+  <rect class="bx-p" x="400" y="270" width="160" height="52" rx="8"/>
+  <text class="lbl on-p" x="480" y="292" text-anchor="middle">属性测试</text>
+  <text class="sm" x="480" y="310" text-anchor="middle">第 5 章</text>
+  <rect class="bx-p" x="568" y="270" width="160" height="52" rx="8"/>
+  <text class="lbl on-p" x="648" y="292" text-anchor="middle">变异测试</text>
+  <text class="sm" x="648" y="310" text-anchor="middle">第 3 章</text>
+
+  <rect class="bx" x="400" y="340" width="328" height="48" rx="8"/>
+  <text class="lbl" x="564" y="362" text-anchor="middle">Mock、Stub、Fake（隔离依赖）</text>
+  <text class="sm" x="564" y="379" text-anchor="middle">第 6 章</text>
+</svg>
+<figcaption>图 1-5　全书路线图：左边帮你写出可测试的功能，右边帮你从多个角度找 Bug</figcaption>
+</figure>
+
+<ol class="steps">
+  <li><strong>需求分析。</strong>需求通常是自然语言，可能是用例或用户故事。先把它理解清楚，再开始写代码。</li>
+  <li><strong>用 TDD 小步前进。</strong>用很短的「写测试 → 写代码」循环获得快速反馈，并支撑开发过程中不断发生的重构。</li>
+  <li><strong>设计单元与契约。</strong>需求很少由一个方法完成，你会写出一组协作的类和方法，每个都有自己的契约。写出容易测试的类不容易，需要有意识地为可测试性设计。</li>
+  <li><strong>转入测试模式。</strong>觉得功能完成了，就切换身份：对每个单元做领域测试、边界测试和结构化测试。</li>
+  <li><strong>必要时写更大的测试。</strong>某些部分需要集成测试或系统测试，推导方法还是那三种，只是看的范围更大。</li>
+  <li><strong>让工具帮你找人眼看不到的。</strong>测试用例生成、变异测试、静态分析……本书讲变异测试。</li>
+  <li><strong>放心发布。</strong></li>
+</ol>
+
+<div class="box key">
+  <div class="t">&#128273; 这不是瀑布流程</div>
+  <p>
+    看起来像一步接一步，实际上是<strong>来回迭代</strong>的：测着测着发现几小时前的设计不好，回去重构；
+    写 TDD 时发现需求有歧义，回去问清楚；测试中发现 Bug，修完继续测；甚至功能只写了一半，就觉得先认真测一下更划算。
+    按你觉得最高效的顺序来。
+  </p>
+</div>
+
+<h3>先专心写，再专心测</h3>
+<p>
+  作者发现把「开发」和「测试」分开很解放：写功能时不想被各种刁钻的边界情况分心，
+  想到了就记个笔记，稍后再测。写完之后，再像过<strong>检查清单</strong>一样逐项应用各种技术 ——
+  就像 Eleanor 看到列表就条件反射地想到「null、空、一个、多个」。最后才动用创造力和领域知识去补充其他情况。
+</p>
+
+<h3>几个常见误解</h3>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#129521;</span><h4>「设计得好就不会有 Bug」</h4><p>研究确实表明简单、无坏味道的代码缺陷更少。但简单远远不够，设计良好不代表能避免所有 Bug。</p></div>
+  <div class="card"><span class="ic">&#128176;</span><h4>「认真测试太贵了」</h4><p>生产环境 Bug 的代价通常远超预防成本；Bug 多的团队会陷入「写 Bug→被发现→修→又被发现」的死循环；而且熟练后设计用例会快很多。</p></div>
+  <div class="card"><span class="ic">&#129302;</span><h4>「会写 JUnit 就会测试」</h4><p>测试框架只负责<em>执行</em>用例、出报告。真正的难点是<strong>设计</strong>出能发现 Bug 的用例 —— 这主要是人的工作，也是本书的重点。</p></div>
+</div>
+
+<h3>「高效」和「系统」分别指什么</h3>
+
+<div class="vs">
+  <div class="new"><div class="h">高效（effective）</div>
+    <div style="padding:10px 14px">写<strong>对的</strong>测试。测试是一场权衡：用最少的力气找到最多的 Bug。
+    关键是知道<em>测什么</em>。书里每种技术都有明确的起点（测什么）和终点（什么时候停）。</div></div>
+  <div class="new"><div class="h">系统（systematic）</div>
+    <div style="padding:10px 14px">对同一段代码，<strong>任何开发者都应该推导出相同的测试集</strong>。
+    不再依赖「谁在测、他当时想到了什么」。把能系统化的部分系统化，让人把创造力留给真正需要的地方。</div></div>
+</div>
+
+<h2 id="principles">为什么测试这么难：七条原则</h2>
+
+<p>一个天真的想法是：「不停加测试，直到够了为止。」可惜没那么简单。下面这些原则（改编自 ISTQB 教材）解释了为什么。</p>
+
+<h3>1. 穷举测试是不可能的</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="300 个布尔开关的组合数远超宇宙原子数">
+  <text class="lbl" x="20" y="28">一个有 300 个开关（布尔配置项）的系统，比如 Linux 内核：</text>
+  <g>
+    <rect class="bx-b" x="20"  y="44" width="26" height="26" rx="4"/><text class="sm" x="33" y="61" text-anchor="middle">T</text>
+    <rect class="bx"   x="52"  y="44" width="26" height="26" rx="4"/><text class="sm" x="65" y="61" text-anchor="middle">F</text>
+    <rect class="bx-b" x="84"  y="44" width="26" height="26" rx="4"/><text class="sm" x="97" y="61" text-anchor="middle">T</text>
+    <rect class="bx-b" x="116" y="44" width="26" height="26" rx="4"/><text class="sm" x="129" y="61" text-anchor="middle">T</text>
+    <rect class="bx"   x="148" y="44" width="26" height="26" rx="4"/><text class="sm" x="161" y="61" text-anchor="middle">F</text>
+    <text class="lbl" x="186" y="62">… 共 300 个，每个可以独立设为 T / F</text>
+  </g>
+  <rect class="bx-a" x="20" y="90" width="340" height="80" rx="10"/>
+  <text class="sm" x="190" y="114" text-anchor="middle">需要测试的组合数</text>
+  <text class="ttl on-a" x="190" y="150" text-anchor="middle" style="font-size:28px">2³⁰⁰ ≈ 10⁹⁰</text>
+  <text class="ttl" x="380" y="138" text-anchor="middle" style="font-size:26px">&gt;</text>
+  <rect class="bx" x="400" y="90" width="340" height="80" rx="10"/>
+  <text class="sm" x="570" y="114" text-anchor="middle">可观测宇宙中的原子数</text>
+  <text class="ttl" x="570" y="150" text-anchor="middle" style="font-size:28px">≈ 10⁸⁰</text>
+</svg>
+<figcaption>图 1-6　组合爆炸：要测的情况比宇宙里的原子还多</figcaption>
+</figure>
+
+<p>既然不可能测遍，就必须<strong>挑选</strong>要测什么。这正是本书强调「高效」的原因。</p>
+
+<h3>2. 知道什么时候该停</h3>
+<p>测太少，系统漏洞百出；不假思索地一个接一个加，又浪费时间和金钱。本书会介绍各种<strong>充分性准则（adequacy criteria）</strong>，帮你判断什么时候可以停。</p>
+
+<h3>3. 多样性很重要（杀虫剂悖论）</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 220" role="img" aria-label="杀虫剂悖论：每种技术像一层过滤网，只能拦住某类 Bug，需要叠加多种">
+  <text class="lbl" x="20" y="24">代码里的各种 Bug ↓</text>
+  <circle class="bx-r" cx="60"  cy="50" r="8"/><circle class="bx-r" cx="110" cy="44" r="8"/>
+  <circle class="bx-p" cx="160" cy="54" r="8"/><circle class="bx-r" cx="220" cy="46" r="8"/>
+  <circle class="bx-b" cx="280" cy="52" r="8"/><circle class="bx-p" cx="340" cy="44" r="8"/>
+  <circle class="bx-b" cx="400" cy="50" r="8"/><circle class="bx-r" cx="460" cy="44" r="8"/>
+  <circle class="bx-g" cx="520" cy="52" r="8"/><circle class="bx-p" cx="580" cy="46" r="8"/>
+  <circle class="bx-g" cx="640" cy="50" r="8"/><circle class="bx-b" cx="700" cy="44" r="8"/>
+
+  <rect class="bx-r" x="20" y="74" width="720" height="26" rx="6"/>
+  <text class="lbl on-r" x="30" y="92">第一层：单元测试 —— 拦住逻辑错误（红色）</text>
+  <rect class="bx-p" x="20" y="108" width="720" height="26" rx="6"/>
+  <text class="lbl on-p" x="30" y="126">第二层：属性测试 —— 拦住没想到的输入组合（紫色）</text>
+  <rect class="bx-b" x="20" y="142" width="720" height="26" rx="6"/>
+  <text class="lbl on-b" x="30" y="160">第三层：集成测试 —— 拦住和数据库、外部服务的通信问题（蓝色）</text>
+
+  <circle class="bx-g" cx="330" cy="196" r="8"/><circle class="bx-g" cx="380" cy="200" r="8"/>
+  <text class="lbl on-g" x="400" y="204">漏网之鱼：只用某一种技术永远抓不到它们</text>
+</svg>
+<figcaption>图 1-7　每种技术都会留下一些它抓不住的、更隐蔽的 Bug。组合使用多种技术才是明智之选</figcaption>
+</figure>
+
+<p>
+  没有银弹。只用单元测试的团队，能找到单元层面的所有 Bug，却会错过只在集成时才出现的问题。
+  「杀虫剂悖论」说的就是：<em>你用来预防或发现 Bug 的每种方法，都会留下一批这种方法对付不了的、更隐蔽的 Bug</em>。
+</p>
+
+<h3>4. Bug 扎堆出现</h3>
+<p>
+  Bug 并不均匀分布。比如支付模块通常比营销模块需要更严格的测试。
+  一项对 Eclipse 项目的研究发现：导入了编译器相关包的文件中，<strong>71%</strong> 后来都需要修 Bug。
+  除了源代码，历史 Bug 数据等信息也能帮你决定把测试精力放在哪里。
+</p>
+
+<h3>5. 无论怎么测，都永远不够完美</h3>
+<p>
+  Dijkstra 的名言：<em>「程序测试可以用来证明 Bug 的存在，但永远无法证明 Bug 不存在。」</em>
+  测试只能保证你测过的那些情况表现正确。所以作者也建议投资<strong>监控</strong>：Bug 一定会漏到生产环境，你要在它出现的那一刻就知道（有时也叫「在生产环境中测试」）。
+</p>
+
+<h3>6. 具体情况具体分析</h3>
+<p>给手机 App、Web 应用、火箭软件设计测试用例，方式大不相同。本书的技术尽量与场景无关，但如果你做移动端，读完后最好再读一本专门的书。</p>
+
+<h3>7. 验证不等于确认</h3>
+
+<div class="vs">
+  <div class="old"><div class="h">验证（Verification）</div>
+    <div style="padding:10px 14px"><strong>把系统做对</strong>（having the system right）<br>给定需求，系统是否正确实现了它？<em>本书主要讲这个。</em></div></div>
+  <div class="new"><div class="h">确认（Validation）</div>
+    <div style="padding:10px 14px"><strong>做对的系统</strong>（having the right system）<br>这个系统是不是用户真正需要的？</div></div>
+</div>
+
+<p>
+  一个完美运行却对用户毫无用处的系统，不是好系统 —— 这叫<strong>「无错误谬论」（absence-of-errors fallacy）</strong>。
+  正如一位审稿人所说：「代码覆盖率容易衡量，需求覆盖率可是另一回事。」
+  不过两者可以相辅相成：Eleanor 系统地思考时想到了「所有人估算相同」，连产品负责人都没料到这种情况。
+</p>
+
+<h2 id="levels">测试的三个层级</h2>
+
+<p>谈务实的测试，首先要决定在哪个<strong>层级</strong>测：单元、集成还是系统。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="三种测试层级覆盖的范围：单元测试只测一个类，集成测试测一个类和外部组件，系统测试测整个系统">
+  <!-- 单元 -->
+  <text class="ttl on-b" x="20" y="24">单元测试</text>
+  <rect class="bx-d" x="14" y="36" width="236" height="250" rx="12"/>
+  <rect class="bx-b" x="30" y="56" width="70" height="36" rx="6"/><text class="mono on-b" x="65" y="79" text-anchor="middle">ATest</text>
+  <path class="ln-b" d="M102 74 H138" marker-end="url(#ar-b)"/>
+  <rect class="bx-b" x="142" y="56" width="90" height="36" rx="6"/><text class="lbl on-b" x="187" y="79" text-anchor="middle">类 A</text>
+  <path class="ln-d" d="M187 94 V124" marker-end="url(#ar)"/>
+  <rect class="bx" x="142" y="128" width="90" height="36" rx="6"/><text class="lbl" x="187" y="151" text-anchor="middle">类 B</text>
+  <path class="ln-d" d="M187 166 V196" marker-end="url(#ar)"/>
+  <rect class="bx" x="142" y="200" width="90" height="36" rx="6"/><text class="lbl" x="187" y="223" text-anchor="middle">类 C</text>
+  <path class="ln-d" d="M142 218 H104" marker-end="url(#ar)"/>
+  <rect class="bx" x="40" y="200" width="60" height="36" rx="18"/><text class="lbl" x="70" y="223" text-anchor="middle">DB</text>
+  <text class="sm" x="30" y="264">只关心 A，尽量把它和</text>
+  <text class="sm" x="30" y="279">其他部分隔离开</text>
+
+  <!-- 集成 -->
+  <text class="ttl on-g" x="266" y="24">集成测试</text>
+  <rect class="bx-d" x="260" y="36" width="236" height="250" rx="12"/>
+  <rect class="bx" x="388" y="56" width="90" height="36" rx="6"/><text class="lbl" x="433" y="79" text-anchor="middle">类 A</text>
+  <path class="ln-d" d="M433 94 V124" marker-end="url(#ar)"/>
+  <rect class="bx" x="388" y="128" width="90" height="36" rx="6"/><text class="lbl" x="433" y="151" text-anchor="middle">类 B</text>
+  <path class="ln-d" d="M433 166 V196" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="388" y="200" width="90" height="36" rx="6"/><text class="lbl on-g" x="433" y="223" text-anchor="middle">类 C（DAO）</text>
+  <path class="ln-g" d="M388 218 H350" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="286" y="200" width="60" height="36" rx="18"/><text class="lbl on-g" x="316" y="223" text-anchor="middle">DB</text>
+  <rect class="bx-g" x="280" y="128" width="80" height="36" rx="6"/><text class="mono on-g" x="320" y="151" text-anchor="middle">CTest</text>
+  <path class="ln-g" d="M360 150 L400 198" marker-end="url(#ar-g)"/>
+  <text class="sm" x="276" y="264">测 C 和真实数据库之间</text>
+  <text class="sm" x="276" y="279">的通信是否正确</text>
+
+  <!-- 系统 -->
+  <text class="ttl on-p" x="512" y="24">系统测试</text>
+  <rect class="bx-p" x="506" y="36" width="240" height="250" rx="12"/>
+  <rect class="bx" x="522" y="56" width="100" height="32" rx="6"/><text class="lbl" x="572" y="77" text-anchor="middle">Web 页面</text>
+  <rect class="bx" x="634" y="56" width="96" height="32" rx="6"/><text class="lbl" x="682" y="77" text-anchor="middle">Web 服务</text>
+  <rect class="bx" x="522" y="104" width="208" height="32" rx="6"/><text class="lbl" x="626" y="125" text-anchor="middle">Controller</text>
+  <rect class="bx" x="522" y="148" width="98" height="32" rx="6"/><text class="lbl" x="571" y="169" text-anchor="middle">类</text>
+  <rect class="bx" x="632" y="148" width="98" height="32" rx="6"/><text class="lbl" x="681" y="169" text-anchor="middle">类</text>
+  <rect class="bx" x="576" y="194" width="100" height="32" rx="16"/><text class="lbl" x="626" y="215" text-anchor="middle">DB</text>
+  <text class="sm on-p" x="522" y="254">整个系统一起跑。不关心内部，</text>
+  <text class="sm on-p" x="522" y="270">只关心「输入 X → 输出 Y」</text>
+</svg>
+<figcaption>图 1-8　三个层级：测试范围越来越大，也越来越接近真实使用</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>层级</th><th>测什么</th><th>优点</th><th>缺点</th></tr>
+  <tr><td><strong>单元测试</strong></td><td>一个（或一小组）不依赖外部系统的类</td>
+      <td>快（几毫秒）；输入输出容易控制；容易写</td>
+      <td>缺乏真实性；集成才会出现的 Bug 抓不到（如前后端对接、多线程）</td></tr>
+  <tr><td><strong>集成测试</strong></td><td>你的代码与外部组件（数据库、Web 服务、文件）之间的交互</td>
+      <td>能验证 SQL 是否真的能跑出想要的结果</td>
+      <td>更难写：要准备独立的测试数据库、建表、造数据、清理</td></tr>
+  <tr><td><strong>系统测试</strong></td><td>整个系统，包括数据库、前端等所有组件</td>
+      <td>最真实，最能给人信心</td>
+      <td>慢；难写；容易<strong>不稳定（flaky）</strong>—— 同样的配置有时过有时不过</td></tr>
+</table>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 「单元」到底多大？</div>
+  <p>
+    Roy Osherove 的定义：「单元测试是一段自动化代码，它调用系统中的一个工作单元。一个工作单元可以是一个方法、一个类，
+    或者多个类一起完成一个可以被验证的逻辑目的。」作者自己的理解：<strong>测试一小组不依赖外部系统（数据库、Web 服务等我无法完全控制的东西）的类</strong>。
+    如果类 A 依赖一个访问数据库的类，就用一个简化的「替身」代替它 —— 这是第 6 章的主题。
+  </p>
+</div>
+
+<h2 id="pyramid">测试金字塔：力气该花在哪</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="测试金字塔：底层单元测试最多，往上依次是集成测试、系统测试和手动探索测试">
+  <polygon points="315,20 365,20 410,90 270,90" style="fill:var(--panel-2);stroke:var(--line-2);stroke-width:1.5"/>
+  <text class="lbl" x="340" y="62" text-anchor="middle">手动探索</text>
+  <polygon points="270,96 410,96 460,170 220,170" style="fill:var(--purple-bg);stroke:var(--purple);stroke-width:1.5"/>
+  <text class="ttl on-p" x="340" y="138" text-anchor="middle">系统测试</text>
+  <polygon points="220,176 460,176 515,250 165,250" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/>
+  <text class="ttl on-g" x="340" y="218" text-anchor="middle">集成测试</text>
+  <polygon points="165,256 515,256 565,316 115,316" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <text class="ttl on-b" x="340" y="291" text-anchor="middle">单元测试</text>
+
+  <path class="ln-a" d="M60 316 V30" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="72" y="44">更真实</text>
+  <text class="sm on-a" x="72" y="60">更复杂</text>
+  <text class="sm on-a" x="72" y="76">更慢</text>
+  <text class="sm" x="72" y="300">数量更多</text>
+
+  <path class="ln-d" d="M414 60 H560"/><text class="lbl" x="566" y="64">用起来看看，找灵感</text>
+  <path class="ln-d" d="M464 136 H560"/><text class="lbl" x="566" y="132">应用的主流程 /</text><text class="lbl" x="566" y="148">高风险流程</text>
+  <path class="ln-d" d="M518 214 H560"/><text class="lbl" x="566" y="210">与外部服务的</text><text class="lbl" x="566" y="226">复杂集成</text>
+  <path class="ln-d" d="M552 286 H560"/><text class="lbl" x="566" y="282">所有业务规则</text><text class="lbl" x="566" y="298">都应该在这里测</text>
+</svg>
+<figcaption>图 1-9　作者版本的测试金字塔：面积代表测试数量，右边是每层测什么</figcaption>
+</figure>
+
+<p>该在哪一层多投入？标准答案是：「看情况。」作者和许多开发者一样<strong>偏爱单元测试</strong>，原因是：</p>
+<ul>
+  <li>好写、跑得快，可以和生产代码穿插着写；</li>
+  <li>开发功能本来就是一个单元一个单元地写，边写边严格测试一个小单元，比事后测一大块功能容易得多；</li>
+  <li>通过<strong>清晰的契约</strong>并系统地测试它们，能大大降低「单个都对、组合起来却出错」的风险；</li>
+  <li>单元层测得够狠，集成和系统测试就只需测真正要紧的部分，不用在高层把所有功能重测一遍。</li>
+</ul>
+
+<h3>每一层测什么</h3>
+<div class="cards">
+  <div class="card"><span class="ic">&#129513;</span><h4>单元测试</h4><p>算法和业务逻辑。多数业务系统都在「变换数据」（订单、发票……），这些逻辑通常不依赖外部服务，完全可控。</p></div>
+  <div class="card"><span class="ic">&#128279;</span><h4>集成测试</h4><p>和外部组件打交道的部分，典型是 DAO：你要确认 SQL 真的返回你要的数据、事务真的提交了。</p></div>
+  <div class="card"><span class="ic">&#127760;</span><h4>系统测试</h4><p>做一次简单的风险分析：哪些部分一旦出错影响最大？只在那些地方做系统测试。</p></div>
+  <div class="card"><span class="ic">&#128064;</span><h4>手动测试</h4><p>偏向探索和确认。时不时自己用一用正在做的系统，常常能找到新的测试灵感。</p></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 如果业务逻辑只能通过整个系统才能测</div>
+  <p>那多半是之前的设计或架构决策在阻碍单元测试。类的设计方式对可测试性影响巨大 —— 第 7 章专门讨论。</p>
+</div>
+
+<div class="box tip">
+  <div class="t">&#128161; 一个真实例子：在线教育平台的支付</div>
+  <p>
+    支付是最关键的功能，最糟的 Bug 就是用户付不了钱。于是团队：用<strong>单元测试</strong>验证「买了什么 → 开通什么权限」等业务规则；
+    用<strong>集成测试</strong>真实调用两家支付网关的沙箱环境，覆盖不同用户、不同信用卡；
+    用<strong>系统测试</strong>启动 Firefox，模拟用户完整的购买旅程，确认付款后产品可用。三层各司其职。
+  </p>
+</div>
+
+<h3>不同意金字塔？也可以</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="测试金字塔与测试奖杯的形状对比">
+  <text class="ttl" x="190" y="22" text-anchor="middle">测试金字塔</text>
+  <polygon points="165,40 215,40 250,95 130,95" style="fill:var(--purple-bg);stroke:var(--purple);stroke-width:1.5"/>
+  <text class="sm on-p" x="190" y="74" text-anchor="middle">系统</text>
+  <polygon points="130,101 250,101 285,150 95,150" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/>
+  <text class="sm on-g" x="190" y="130" text-anchor="middle">集成</text>
+  <polygon points="95,156 285,156 320,210 60,210" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <text class="sm on-b" x="190" y="188" text-anchor="middle">单元（最多）</text>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">测试奖杯</text>
+  <rect x="535" y="40" width="70" height="44" rx="6" style="fill:var(--purple-bg);stroke:var(--purple);stroke-width:1.5"/>
+  <text class="sm on-p" x="570" y="66" text-anchor="middle">系统</text>
+  <rect x="470" y="90" width="200" height="74" rx="10" style="fill:var(--green-bg);stroke:var(--green);stroke-width:1.5"/>
+  <text class="sm on-g" x="570" y="131" text-anchor="middle">集成（最多）</text>
+  <rect x="530" y="170" width="80" height="40" rx="6" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <text class="sm on-b" x="570" y="194" text-anchor="middle">单元</text>
+</svg>
+<figcaption>图 1-10　两种流派：金字塔押注单元测试，奖杯押注集成测试</figcaption>
+</figure>
+
+<p>
+  很多人支持<strong>测试奖杯（testing trophy）</strong>：底部单元测试薄，中间集成测试厚。他们的理由很实在：
+</p>
+<ul>
+  <li><strong>微服务架构</strong>：复杂性主要在服务之间的集成，真实调用其他服务比用 Mock 更让人放心。</li>
+  <li><strong>以数据库为中心的信息系统</strong>：主要职责就是存、取、展示，没什么复杂算法，SQL 往往才是最复杂的部分。</li>
+</ul>
+<p>
+  作者即使在微服务场景下，也会先在每个服务里写大量单元测试并认真设计契约，<em>然后</em>再写很多集成测试。
+  但他也坦言：目前没有科学证据支持或反对金字塔 —— 2020 年一项分析了 3 万个测试的研究，没发现哪一层对哪类缺陷更有效。
+  <strong>具体情况具体分析</strong>，找到适合你和团队的方式。
+</p>
+
+<h3>另一种分法：按测试「大小」</h3>
+<p>Google 不按边界（单元/集成/系统），而是按<strong>运行代价</strong>来分：</p>
+<div class="tw">
+<table>
+  <tr><th>大小</th><th>限制</th><th>特点</th></tr>
+  <tr><td>小型测试</td><td>在单个进程内执行</td><td>接触不到慢和不确定性的主要来源 → 快且稳定</td></tr>
+  <tr><td>中型测试</td><td>可以跨进程、用线程、访问 localhost 网络</td><td>更慢，也更容易不稳定</td></tr>
+  <tr><td>大型测试</td><td>去掉 localhost 限制，可以调用多台机器</td><td>留给完整的端到端测试</td></tr>
+</table>
+</div>
+<p>Google 大约 80% 的测试是单元测试。无论怎么分，目标都一样：让每个测试<strong>写起来尽量便宜、跑起来尽量快、给出尽量多的质量反馈</strong>。</p>
+
+<div class="box key">
+  <div class="t">&#128273; 本书能帮你找到所有 Bug 吗？</div>
+  <p>
+    不能！但书里的技术能帮你找到很多 Bug —— 希望是所有重要的那些。
+    书中例子大多是方法、类和单元测试，但道理可以推广到更粗粒度的组件：看到一个方法时，你完全可以把它想成一个 Web 服务，推理过程相同，只是用例更多。
+  </p>
+</div>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>测试和测试代码可以引导开发，但软件测试的核心是<strong>找 Bug</strong>，这也是本书的重点。</li>
+  <li>系统而高效的测试帮你设计出能触及代码每个角落的用例，尽量不给意外行为留空间。</li>
+  <li>即使再系统，也无法证明程序没有 Bug；穷举测试不可能，测试者的日常就是在「测多少」上做权衡。</li>
+  <li>测试可以在不同层级进行，从测一个小方法到测包含数据库和 Web 服务的整个系统，各有利弊。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>1.1　用自己的话解释：什么是系统化测试？它和非系统化测试有什么不同？</summary>
+<p>系统化测试就是用<strong>有章可循的技术</strong>（从需求、边界、源代码出发）来设计测试用例，而不是凭直觉想到什么测什么。
+它让不同的人对同一段代码推导出相近的测试集。</p></details>
+
+<details class="quiz"><summary>1.2　某读书社交网站 Bug 很少，但用户抱怨「它没有兑现承诺」。这符合哪条测试原则？</summary>
+<p><strong>无错误谬论（absence-of-errors fallacy）</strong>。验证做得好，但确认没做好：系统做对了，却不是用户要的系统。</p></details>
+
+<details class="quiz"><summary>1.3　新人发现 50% 以上的 Bug 出在国际支付模块，承诺「完整覆盖这个模块，找出所有 Bug」。为什么做不到？（A 杀虫剂悖论　B 穷举测试　C 尽早测试　D 缺陷聚集）</summary>
+<p><strong>B</strong>。穷举测试在绝大多数情况下是不可能的。（她观察到的现象本身是「缺陷聚集」，但「找出所有 Bug」的承诺违背的是穷举测试原则。）</p></details>
+
+<details class="quiz"><summary>1.4　John 只做单元测试。以下哪条原则<em>无法</em>帮助说服他改变？（A 杀虫剂悖论　B 测试依赖于上下文　C 无错误谬论　D 尽早测试）</summary>
+<p><strong>D</strong>。「尽早测试」很重要，但和「只做单元测试」的问题无关；其他原则都能说明为什么需要多种测试。</p></details>
+
+<details class="quiz"><summary>1.5　一个健身 App 团队分支覆盖率超过 95%，用户仍报告大量 Bug。顾问讲的是哪条原则？</summary>
+<p><strong>杀虫剂悖论</strong>。覆盖率很高，但只用了一种技术，需要引入不同的测试方法。</p></details>
+
+<details class="quiz"><summary>1.6　「网店每天跑一次批处理：从外部数据库取出已付款订单，按是否国际客户设置发货日期，再发送给外部 Web 服务。」该选哪个层级？</summary>
+<p>正确说法是：<strong>集成测试虽然更难自动化，但能更好地发现与 Web 服务和数据库通信中的 Bug</strong>。「用 Mock 写单元测试适用于一切」和「只选一个层级深挖」都不对。</p></details>
+
+<details class="quiz"><summary>1.7　一个薪资系统用 Java 类向 Postgres 发送复杂 SQL。以下哪个<em>不是</em>发现 SQL Bug 的好选择？（单元测试 / 集成测试 / 系统测试 / 压力测试）</summary>
+<p><strong>单元测试</strong>。要知道 SQL 对不对，最好的办法是真的发给数据库执行，这正是集成测试（或更高层级）的工作。</p></details>
+
+<details class="quiz"><summary>1.8　系统测试最主要的优点是什么？</summary>
+<p><strong>与系统的交互更接近真实使用。</strong>（系统测试恰恰更容易不稳定，也不一定由产品负责人编写。）</p></details>
+
+<details class="quiz"><summary>1.9　金字塔里推荐的系统测试数量比单元测试少，最主要的原因是？</summary>
+<p><strong>系统测试往往很慢，而且很难做到结果确定（不 flaky）。</strong></p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>克隆本仓库，进入 <code>ch1</code> 目录运行 <code>mvn test</code>。然后运行 <code>MainMethodJohnUsedToTest</code>，亲眼看看 John 的版本在升序输入时抛出的异常。</li>
+    <li>把 <code>PlanningPoker</code> 里第二个 <code>if</code> 改回 <code>else if</code>，再跑一次测试。哪个测试失败了？失败信息里给出的「反例」长什么样？</li>
+    <li>挑一种你熟悉的语言（Python 或 TypeScript），照着上面的标签页把 <code>identifyExtremes</code> 和全部测试敲一遍。</li>
+    <li>想一想：如果输入的估算值可以是负数或 0，你的测试清单里还应该加什么？</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

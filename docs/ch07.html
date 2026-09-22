@@ -1,0 +1,1422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 7 章 · 为可测试性而设计 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="7">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 7 章</span>
+<h1>为可测试性而设计</h1>
+<p class="lede">
+  任何系统都能测，只是有的好测、有的难测。如果为了一个测试用例，要先搭三个 Web 服务、在不同目录建五个文件、把数据库调到特定状态，
+  测完还要逐一检查它们 —— 能做到，但真的必须这么复杂吗？
+  <strong>可测试性（testability）</strong>就是为一个系统、类或方法写自动化测试有多容易。这一章从架构、类、方法三个层面讲怎么让代码好测。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>把基础设施代码和领域代码分开：六边形架构（端口与适配器）</li>
+    <li>通过依赖注入和依赖倒置提升<strong>可控性</strong></li>
+    <li>通过合适的方法和返回值提升<strong>可观察性</strong></li>
+    <li>权衡「依赖从构造函数传入」还是「值从参数传入」</li>
+    <li>学会「倾听测试」：从难写的测试中读出设计问题</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<div class="box key">
+  <div class="t">&#128273; 什么时候考虑可测试性？</div>
+  <p>
+    <strong>一直都要。</strong>大部分发生在实现功能的过程中，所以在第 1 章的流程图里它属于左边「用测试引导开发」。有时写代码时没发现不可测的地方，到了测试阶段才冒出来，那就回去重构。
+    有人说为可测试性设计更难、代码更多 —— 也许是真的，写意大利面条式代码确实更容易。但好的、可测的代码虽然更贵，却是保证质量的唯一途径。
+  </p>
+</div>
+
+<h2 id="separate">把基础设施与领域分开</h2>
+
+<p>如果只能给一条建议，作者会说：<strong>把基础设施代码和领域代码分开。</strong></p>
+
+<div class="vs">
+  <div class="new"><div class="h">领域（domain）</div>
+    <div style="padding:10px 14px">系统的核心：业务规则、逻辑、实体、服务。例如 <code>Invoice</code>、<code>ChristmasDiscount</code>。</div></div>
+  <div class="old"><div class="h">基础设施（infrastructure）</div>
+    <div style="padding:10px 14px">处理外部依赖的代码：数据库查询、Web 服务调用、文件读写。前面所有的 DAO 都属于这一类。</div></div>
+</div>
+
+<p>两者混在一起时，系统就难测了。看这个把 SQL 直接写在里面的 InvoiceFilter：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="混合了领域和基础设施的 InvoiceFilter"><pre>
+public class InvoiceFilter {
+
+  private List&lt;Invoice&gt; all() {           // 直接从数据库取所有发票
+    try {
+      Connection connection = DriverManager.getConnection("db", "root", "");
+      PreparedStatement ps = connection.prepareStatement("select * from invoice");
+      ResultSet rs = ps.executeQuery();
+
+      List&lt;Invoice&gt; allInvoices = new ArrayList&lt;&gt;();
+      while (rs.next()) {
+        allInvoices.add(new Invoice(rs.getString("name"), rs.getInt("value")));
+      }
+      ps.close();
+      connection.close();
+      return allInvoices;
+    } catch (Exception e) {
+      // 处理异常：数据库 API 总要处理一堆异常
+    }
+  }
+
+  public List&lt;Invoice&gt; lowValueInvoices() {
+    List&lt;Invoice&gt; issuedInvoices = all();  // 业务规则调用同一个类里的数据库代码
+    return issuedInvoices.stream()
+        .filter(invoice -&gt; invoice.getValue() &lt; 100)
+        .collect(toList());
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="混合了领域和基础设施的 InvoiceFilter"><pre>
+import sqlite3
+
+class InvoiceFilter:
+
+    def _all(self) -&gt; list[Invoice]:        # 直接从数据库取所有发票
+        connection = sqlite3.connect("invoices.db")
+        try:
+            rows = connection.execute("select name, value from invoice").fetchall()
+            return [Invoice(name, value) for name, value in rows]
+        finally:
+            connection.close()
+
+    def low_value_invoices(self) -&gt; list[Invoice]:
+        issued = self._all()                # 业务规则调用同一个类里的数据库代码
+        return [inv for inv in issued if inv.value &lt; 100]
+</pre></div>
+<div class="code" data-lang="ts" data-file="混合了领域和基础设施的 InvoiceFilter"><pre>
+import { DatabaseSync } from "node:sqlite";
+
+export class InvoiceFilter {
+  private all(): Invoice[] {                // 直接从数据库取所有发票
+    const db = new DatabaseSync("invoices.db");
+    try {
+      return db.prepare("select name, value from invoice").all()
+        .map((r) =&gt; ({ customer: String(r.name), value: Number(r.value) }));
+    } finally {
+      db.close();
+    }
+  }
+
+  lowValueInvoices(): Invoice[] {
+    const issued = this.all();              // 业务规则调用同一个类里的数据库代码
+    return issued.filter((invoice) =&gt; invoice.value &lt; 100);
+  }
+}
+</pre></div>
+</div>
+
+<ul>
+  <li><strong>领域和基础设施混在一起。</strong>测「低金额发票」规则时绕不开数据库 —— 你怎么在调用公有方法时 Stub 掉一个私有方法？</li>
+  <li><strong>职责越多，越复杂，Bug 越多。</strong>内聚性差的类代码更多，这个类可能同时有 SQL 的 Bug 和业务逻辑的 Bug。实证研究表明，更长的方法和类更容易有缺陷（Shatnawi 和 Li，2006）。</li>
+  <li><strong>设计用例也更费脑。</strong>简单的代码可探索的情况也少；职责越多，越要考虑功能之间的相互作用。</li>
+</ul>
+
+<p>基础设施并不是唯一的外部影响。用户界面也常常和领域代码混在一起，这同样不利于测试 —— <strong>检验业务规则时不应该需要用户界面</strong>。</p>
+
+<h3>六边形架构：端口与适配器</h3>
+
+<p>
+  最简单的解释方式是 Alistair Cockburn（2005）提出的<strong>端口与适配器（Ports and Adapters）</strong>模式，也叫<strong>六边形架构</strong>：
+  领域（业务逻辑）依赖的是<strong>端口</strong>，而不是直接依赖基础设施。端口是接口，定义了基础设施能做什么，与基础设施的具体实现完全分离；
+  <strong>适配器</strong>是端口的实现，紧贴基础设施，知道如何与数据库、Web 服务等通信。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 360" role="img" aria-label="六边形架构：中间的六边形是应用和业务逻辑，边上是端口，外面是连接各种外部系统的适配器">
+  <polygon points="380,40 540,110 540,250 380,320 220,250 220,110" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:2"/>
+  <text class="ttl on-a" x="380" y="120" text-anchor="middle">应用（领域）</text>
+  <rect class="bx" x="300" y="140" width="160" height="30" rx="6"/><text class="lbl" x="380" y="160" text-anchor="middle">功能 1</text>
+  <rect class="bx" x="300" y="178" width="160" height="30" rx="6"/><text class="lbl" x="380" y="198" text-anchor="middle">功能 2</text>
+  <rect class="bx" x="300" y="216" width="160" height="30" rx="6"/><text class="lbl" x="380" y="236" text-anchor="middle">功能 N</text>
+  <text class="sm" x="380" y="272" text-anchor="middle">只懂业务，对外部世界一无所知</text>
+
+  <rect class="bx-b" x="206" y="96" width="44" height="22" rx="4"/><text class="sm on-b" x="228" y="111" text-anchor="middle">端口</text>
+  <rect class="bx-b" x="510" y="96" width="44" height="22" rx="4"/><text class="sm on-b" x="532" y="111" text-anchor="middle">端口</text>
+  <rect class="bx-b" x="206" y="240" width="44" height="22" rx="4"/><text class="sm on-b" x="228" y="255" text-anchor="middle">端口</text>
+  <rect class="bx-b" x="510" y="240" width="44" height="22" rx="4"/><text class="sm on-b" x="532" y="255" text-anchor="middle">端口</text>
+
+  <rect class="bx-g" x="30" y="70" width="140" height="44" rx="8"/><text class="lbl on-g" x="100" y="97" text-anchor="middle">UI 适配器</text>
+  <rect class="bx-g" x="590" y="70" width="140" height="44" rx="8"/><text class="lbl on-g" x="660" y="97" text-anchor="middle">数据库适配器</text>
+  <rect class="bx-g" x="30" y="246" width="140" height="44" rx="8"/><text class="lbl on-g" x="100" y="273" text-anchor="middle">某系统适配器</text>
+  <rect class="bx-g" x="590" y="246" width="140" height="44" rx="8"/><text class="lbl on-g" x="660" y="273" text-anchor="middle">另一系统适配器</text>
+  <path class="ln-g" d="M172 92 L204 104"/>
+  <path class="ln-g" d="M588 92 L556 104"/>
+  <path class="ln-g" d="M172 268 L204 254"/>
+  <path class="ln-g" d="M588 268 L556 254"/>
+
+  <text class="sm on-b" x="380" y="24" text-anchor="middle">端口（蓝）：技术无关的接口，说「业务语言」</text>
+  <text class="sm on-g" x="380" y="348" text-anchor="middle">适配器（绿）：实现端口，与具体的外部基础设施打交道</text>
+</svg>
+<figcaption>图 7-1　六边形架构（端口与适配器）</figcaption>
+</figure>
+
+<h3>例子：处理已付款的购物车</h3>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>对今天所有已付款的购物车，系统应该：</p>
+  <ul>
+    <li>把购物车状态设为「待发货」，并把新状态持久化到数据库；</li>
+    <li>通知配送中心，让他们给客户发货；</li>
+    <li>通知 SAP 系统；</li>
+    <li>给客户发一封确认付款成功的邮件，附上预计送达日期（该信息由配送中心 API 提供）。</li>
+  </ul>
+</div>
+
+<p>
+  第一步：分清什么属于应用（六边形内部），什么不属于。与 ShoppingCart 相关的业务规则（比如改变状态）以及付款后的整个流程，属于内部；
+  发邮件、与 SAP 通信、与配送中心 API 通信、访问数据库，都由外部系统处理，需要为它们设计端口和适配器：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 390" role="img" aria-label="购物车例子的六边形架构：PaidShoppingCartsBatch 通过四个端口与外部系统交互">
+  <polygon points="380,80 520,140 520,250 380,310 240,250 240,140" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:2"/>
+  <rect class="bx-a" x="300" y="150" width="160" height="44" rx="8"/>
+  <text class="ttl on-a" x="380" y="170" text-anchor="middle">PaidShoppingCarts</text>
+  <text class="ttl on-a" x="380" y="186" text-anchor="middle">Batch</text>
+  <rect class="bx" x="315" y="210" width="130" height="30" rx="6"/><text class="lbl" x="380" y="230" text-anchor="middle">ShoppingCart</text>
+  <text class="sm" x="380" y="266" text-anchor="middle">领域对象</text>
+
+  <rect class="bx-b" x="170" y="118" width="130" height="26" rx="5"/><text class="sm on-b" x="235" y="136" text-anchor="middle">CustomerNotifier</text>
+  <rect class="bx-b" x="460" y="118" width="120" height="26" rx="5"/><text class="sm on-b" x="520" y="136" text-anchor="middle">DeliveryCenter</text>
+  <rect class="bx-b" x="170" y="246" width="130" height="26" rx="5"/><text class="sm on-b" x="235" y="264" text-anchor="middle">SAP</text>
+  <rect class="bx-b" x="440" y="246" width="160" height="26" rx="5"/><text class="sm on-b" x="520" y="264" text-anchor="middle">ShoppingCartRepository</text>
+
+  <rect class="bx-g" x="14" y="60" width="150" height="40" rx="8"/><text class="lbl on-g" x="89" y="85" text-anchor="middle">SMTPCustomerNotifier</text>
+  <rect class="bx-g" x="596" y="60" width="150" height="40" rx="8"/><text class="lbl on-g" x="671" y="85" text-anchor="middle">DeliveryCenterRestApi</text>
+  <rect class="bx-g" x="14" y="290" width="150" height="40" rx="8"/><text class="lbl on-g" x="89" y="315" text-anchor="middle">SAPSoapWebService</text>
+  <rect class="bx-g" x="596" y="290" width="150" height="40" rx="8"/><text class="lbl on-g" x="671" y="310" text-anchor="middle">ShoppingCart</text><text class="lbl on-g" x="671" y="324" text-anchor="middle">HibernateDao</text>
+  <path class="ln-g" d="M150 102 L200 116"/><path class="ln-g" d="M610 102 L560 116"/>
+  <path class="ln-g" d="M150 288 L200 274"/><path class="ln-g" d="M610 288 L560 274"/>
+
+  <rect class="bx-d" x="14" y="10" width="150" height="34" rx="17"/><text class="sm" x="89" y="31" text-anchor="middle">SMTP 服务器</text>
+  <rect class="bx-d" x="596" y="10" width="150" height="34" rx="17"/><text class="sm" x="671" y="31" text-anchor="middle">配送中心 Web 服务</text>
+  <rect class="bx-d" x="14" y="346" width="150" height="34" rx="17"/><text class="sm" x="89" y="367" text-anchor="middle">SAP Web 服务</text>
+  <rect class="bx-d" x="596" y="346" width="150" height="34" rx="17"/><text class="sm" x="671" y="367" text-anchor="middle">MySQL 数据库</text>
+  <path class="ln-d" d="M89 46 V58"/><path class="ln-d" d="M671 46 V58"/>
+  <path class="ln-d" d="M89 332 V344"/><path class="ln-d" d="M671 332 V344"/>
+</svg>
+<figcaption>图 7-2　购物车例子：领域对象只认识端口（蓝），适配器（绿）负责和外部系统打交道</figcaption>
+</figure>
+
+<p>领域类 <code>PaidShoppingCartsBatch</code> 的自然实现里，<strong>没有一丁点基础设施细节</strong>：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/domain/PaidShoppingCartsBatch.java"><pre>
+public class PaidShoppingCartsBatch {
+  private ShoppingCartRepository db;
+  private DeliveryCenter deliveryCenter;
+  private CustomerNotifier notifier;
+  private SAP sap;
+
+  // 所有依赖都注入：测试时可以传入 Stub 和 Mock
+  public PaidShoppingCartsBatch(ShoppingCartRepository db, DeliveryCenter deliveryCenter,
+                                CustomerNotifier notifier, SAP sap) {
+    this.db = db;
+    this.deliveryCenter = deliveryCenter;
+    this.notifier = notifier;
+    this.sap = sap;
+  }
+
+  public void processAll() {
+    List&lt;ShoppingCart&gt; paidShoppingCarts = db.cartsPaidToday();
+    for (ShoppingCart cart : paidShoppingCarts) {
+      LocalDate estimatedDayOfDelivery = deliveryCenter.deliver(cart);  // 通知配送中心
+      cart.markAsReadyForDelivery(estimatedDayOfDelivery);             // 标记待发货
+      db.persist(cart);                                                // 持久化
+      notifier.sendEstimatedDeliveryNotification(cart);                // 通知客户
+      sap.cartReadyForDelivery(cart);                                  // 通知 SAP
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="paid_shopping_carts_batch.py"><pre>
+from ports import ShoppingCartRepository, DeliveryCenter, CustomerNotifier, SAP
+
+class PaidShoppingCartsBatch:
+    # 所有依赖都注入：测试时可以传入 Stub 和 Mock
+    def __init__(self, db: ShoppingCartRepository, delivery_center: DeliveryCenter,
+                 notifier: CustomerNotifier, sap: SAP):
+        self._db = db
+        self._delivery_center = delivery_center
+        self._notifier = notifier
+        self._sap = sap
+
+    def process_all(self) -&gt; None:
+        for cart in self._db.carts_paid_today():
+            estimated = self._delivery_center.deliver(cart)          # 通知配送中心
+            cart.mark_as_ready_for_delivery(estimated)               # 标记待发货
+            self._db.persist(cart)                                   # 持久化
+            self._notifier.send_estimated_delivery_notification(cart)  # 通知客户
+            self._sap.cart_ready_for_delivery(cart)                  # 通知 SAP
+</pre></div>
+<div class="code" data-lang="ts" data-file="paidShoppingCartsBatch.ts"><pre>
+import { ShoppingCartRepository, DeliveryCenter, CustomerNotifier, SAP } from "./ports";
+
+export class PaidShoppingCartsBatch {
+  // 所有依赖都注入：测试时可以传入 Stub 和 Mock
+  constructor(
+    private readonly db: ShoppingCartRepository,
+    private readonly deliveryCenter: DeliveryCenter,
+    private readonly notifier: CustomerNotifier,
+    private readonly sap: SAP,
+  ) {}
+
+  processAll(): void {
+    for (const cart of this.db.cartsPaidToday()) {
+      const estimated = this.deliveryCenter.deliver(cart);         // 通知配送中心
+      cart.markAsReadyForDelivery(estimated);                      // 标记待发货
+      this.db.persist(cart);                                       // 持久化
+      this.notifier.sendEstimatedDeliveryNotification(cart);       // 通知客户
+      this.sap.cartReadyForDelivery(cart);                         // 通知 SAP
+    }
+  }
+}
+</pre></div>
+</div>
+
+<p>它的四个依赖都是<strong>接口</strong>，也就是六边形架构里的端口。它们与技术和基础设施完全无关，只依赖其他领域类（如 ShoppingCart），这没问题：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/ports/*.java"><pre>
+public interface DeliveryCenter {
+  // 具体实现可能要调一个很复杂的 Web 服务，但端口把这些都藏起来了
+  LocalDate deliver(ShoppingCart cart);
+}
+
+public interface CustomerNotifier {
+  void sendEstimatedDeliveryNotification(ShoppingCart cart);
+}
+
+public interface SAP {
+  void cartReadyForDelivery(ShoppingCart cart);
+}
+
+public interface ShoppingCartRepository {   // 名字里连 "database" 都没有：Repository 是更业务化的词
+  List&lt;ShoppingCart&gt; cartsPaidToday();
+  void persist(ShoppingCart cart);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="ports.py"><pre>
+from datetime import date
+from typing import Protocol
+from shopping_cart import ShoppingCart
+
+# Protocol：只描述「长什么样」，任何有这些方法的对象都满足它（结构化类型）
+class DeliveryCenter(Protocol):
+    def deliver(self, cart: ShoppingCart) -&gt; date: ...
+
+class CustomerNotifier(Protocol):
+    def send_estimated_delivery_notification(self, cart: ShoppingCart) -&gt; None: ...
+
+class SAP(Protocol):
+    def cart_ready_for_delivery(self, cart: ShoppingCart) -&gt; None: ...
+
+class ShoppingCartRepository(Protocol):
+    def carts_paid_today(self) -&gt; list[ShoppingCart]: ...
+    def persist(self, cart: ShoppingCart) -&gt; None: ...
+</pre></div>
+<div class="code" data-lang="ts" data-file="ports.ts"><pre>
+import { ShoppingCart } from "./shoppingCart";
+
+// 端口说「业务语言」，不泄露任何基础设施细节
+export interface DeliveryCenter {
+  deliver(cart: ShoppingCart): Date;
+}
+
+export interface CustomerNotifier {
+  sendEstimatedDeliveryNotification(cart: ShoppingCart): void;
+}
+
+export interface SAP {
+  cartReadyForDelivery(cart: ShoppingCart): void;
+}
+
+export interface ShoppingCartRepository {
+  cartsPaidToday(): ShoppingCart[];
+  persist(cart: ShoppingCart): void;
+}
+</pre></div>
+</div>
+
+<p>适配器是实现端口的类，具体代码超出本书范围，骨架大致如下：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/adapters/*.java（骨架）"><pre>
+public class DeliveryCenterRestApi implements DeliveryCenter {
+  @Override
+  public LocalDate deliver(ShoppingCart cart) {
+    // 与配送 API 通信所需的全部代码，返回一个 LocalDate
+  }
+}
+
+public class SMTPCustomerNotifier implements CustomerNotifier {
+  @Override
+  public void sendEstimatedDeliveryNotification(ShoppingCart cart) {
+    // 通过 SMTP 发邮件所需的全部代码
+  }
+}
+
+public class SAPSoapWebService implements SAP {
+  @Override
+  public void cartReadyForDelivery(ShoppingCart cart) {
+    // 调用 SAP 的 SOAP Web 服务所需的全部代码
+  }
+}
+
+public class ShoppingCartHibernateDao implements ShoppingCartRepository {
+  @Override
+  public List&lt;ShoppingCart&gt; cartsPaidToday() { /* Hibernate 查询 */ }
+  @Override
+  public void persist(ShoppingCart cart) { /* Hibernate 持久化 */ }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="adapters.py（骨架）"><pre>
+class DeliveryCenterRestApi:             # 不需要显式继承 Protocol，方法对得上就行
+    def deliver(self, cart):
+        ...  # 用 httpx/requests 调用配送 API，返回 date
+
+class SMTPCustomerNotifier:
+    def send_estimated_delivery_notification(self, cart):
+        ...  # 用 smtplib 发邮件
+
+class SAPSoapWebService:
+    def cart_ready_for_delivery(self, cart):
+        ...  # 用 zeep 等库调用 SOAP 服务
+
+class ShoppingCartSqlAlchemyRepository:
+    def carts_paid_today(self):
+        ...  # SQLAlchemy 查询
+    def persist(self, cart):
+        ...  # SQLAlchemy 持久化
+</pre></div>
+<div class="code" data-lang="ts" data-file="adapters.ts（骨架）"><pre>
+export class DeliveryCenterRestApi implements DeliveryCenter {
+  deliver(cart: ShoppingCart): Date {
+    // 用 fetch 调用配送 API，返回 Date
+  }
+}
+
+export class SMTPCustomerNotifier implements CustomerNotifier {
+  sendEstimatedDeliveryNotification(cart: ShoppingCart): void {
+    // 用 nodemailer 等库发邮件
+  }
+}
+
+export class SAPSoapWebService implements SAP {
+  cartReadyForDelivery(cart: ShoppingCart): void {
+    // 调用 SAP 的 SOAP 服务
+  }
+}
+
+export class ShoppingCartPrismaRepository implements ShoppingCartRepository {
+  cartsPaidToday(): ShoppingCart[] { /* Prisma 查询 */ }
+  persist(cart: ShoppingCart): void { /* Prisma 持久化 */ }
+}
+</pre></div>
+</div>
+
+<p>为什么这能提升可测试性？领域类只依赖端口，所以 Stub 和 Mock 端口，就能检验领域逻辑的全部行为。配送中心适配器是否正确工作？这里不关心，那由它自己的测试负责：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/PaidShoppingCartsBatchTest.java（第一版：用 spy）"><pre>
+@ExtendWith(MockitoExtension.class)            // Mockito 扩展：@Mock 字段会自动创建 Mock
+public class PaidShoppingCartsBatchTest {
+  @Mock ShoppingCartRepository db;
+  @Mock private DeliveryCenter deliveryCenter;
+  @Mock private CustomerNotifier notifier;
+  @Mock private SAP sap;
+
+  @Test
+  void theWholeProcessHappens() {
+    PaidShoppingCartsBatch batch = new PaidShoppingCartsBatch(db, deliveryCenter, notifier, sap);
+
+    ShoppingCart someCart = spy(new ShoppingCart(100));   // 实体不用 Mock，但 spy 它以便验证调用
+    LocalDate someDate = LocalDate.now();
+    when(db.cartsPaidToday()).thenReturn(Arrays.asList(someCart));
+    when(deliveryCenter.deliver(someCart)).thenReturn(someDate);
+
+    batch.processAll();
+
+    verify(deliveryCenter).deliver(someCart);
+    verify(notifier).sendEstimatedDeliveryNotification(someCart);
+    verify(db).persist(someCart);
+    verify(sap).cartReadyForDelivery(someCart);
+    verify(someCart).markAsReadyForDelivery(someDate);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_paid_shopping_carts_batch.py（第一版：用 wraps 当 spy）"><pre>
+from datetime import date
+from unittest.mock import Mock
+from shopping_cart import ShoppingCart
+from paid_shopping_carts_batch import PaidShoppingCartsBatch
+
+def test_the_whole_process_happens():
+    db, delivery_center, notifier, sap = Mock(), Mock(), Mock(), Mock()
+    batch = PaidShoppingCartsBatch(db, delivery_center, notifier, sap)
+
+    real_cart = ShoppingCart(100)
+    some_cart = Mock(wraps=real_cart)           # spy：调用会转发给真实对象，同时被记录
+    some_date = date.today()
+    db.carts_paid_today.return_value = [some_cart]
+    delivery_center.deliver.return_value = some_date
+
+    batch.process_all()
+
+    delivery_center.deliver.assert_called_once_with(some_cart)
+    notifier.send_estimated_delivery_notification.assert_called_once_with(some_cart)
+    db.persist.assert_called_once_with(some_cart)
+    sap.cart_ready_for_delivery.assert_called_once_with(some_cart)
+    some_cart.mark_as_ready_for_delivery.assert_called_once_with(some_date)
+</pre></div>
+<div class="code" data-lang="ts" data-file="paidShoppingCartsBatch.test.ts（第一版：用 vi.spyOn）"><pre>
+import { test, expect, vi } from "vitest";
+import { ShoppingCart } from "./shoppingCart";
+import { PaidShoppingCartsBatch } from "./paidShoppingCartsBatch";
+
+test("the whole process happens", () =&gt; {
+  const someCart = new ShoppingCart(100);
+  const someDate = new Date();
+  const db = { cartsPaidToday: vi.fn(() =&gt; [someCart]), persist: vi.fn() };
+  const deliveryCenter = { deliver: vi.fn(() =&gt; someDate) };
+  const notifier = { sendEstimatedDeliveryNotification: vi.fn() };
+  const sap = { cartReadyForDelivery: vi.fn() };
+  const spy = vi.spyOn(someCart, "markAsReadyForDelivery");   // spy：真实方法照常执行，同时被记录
+
+  new PaidShoppingCartsBatch(db, deliveryCenter, notifier, sap).processAll();
+
+  expect(deliveryCenter.deliver).toHaveBeenCalledWith(someCart);
+  expect(notifier.sendEstimatedDeliveryNotification).toHaveBeenCalledWith(someCart);
+  expect(db.persist).toHaveBeenCalledWith(someCart);
+  expect(sap.cartReadyForDelivery).toHaveBeenCalledWith(someCart);
+  expect(spy).toHaveBeenCalledWith(someDate);
+});
+</pre></div>
+</div>
+
+<p>
+  这只是一个测试。作为开发者，你应该运用所有测试技术，为能想到的各种行为和边界情况设计用例 —— 连异常情况也很容易检验。
+  另外，虽然我们只测了应用代码，<strong>适配器的代码也要测</strong>：ShoppingCartHibernateDao 里会有复杂、易错的 SQL，SAPSoapWebService 里会有调 SOAP 服务的复杂代码。按照第 1 章的测试金字塔，它们需要<strong>集成测试</strong>（第 9 章会写）。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 每个端口都要一个接口吗？</div>
+  <p>
+    「分离基础设施与领域」不仅出现在六边形架构中，也出现在 Evans 的《领域驱动设计》（2004）和 Martin 的《整洁架构》（2018）里。
+    初学者常问：<strong>每个端口都必须建接口吗？</strong>当然不必。作者只在看到<strong>不止一种实现</strong>时才建接口。即使没有接口，也要保证具体实现不泄露实现细节。上下文和务实才是王道。
+  </p>
+</div>
+
+<div class="box warn">
+  <div class="t">&#9888; 别被「就一行 SQL 而已」诱惑</div>
+  <p>「只是一个简单的数据库调用，直接写这儿多方便！」—— 写出不可测的代码总是更容易，但它迟早会反咬你一口。</p>
+</div>
+
+<h2 id="controllability">依赖注入与可控性</h2>
+
+<p>在类的层面，最重要的建议是：确保类<strong>可控</strong>（你能轻松控制被测类做什么）且<strong>可观察</strong>（你能看到它做了什么、检查它的结果）。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="可控性与可观察性：测试控制输入和依赖，观察输出和交互">
+  <rect class="bx-b" x="20" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-b" x="120" y="68" text-anchor="middle">可控性</text>
+  <text class="sm" x="120" y="90" text-anchor="middle">能轻松控制被测类的</text>
+  <text class="sm" x="120" y="106" text-anchor="middle">输入、依赖和初始状态</text>
+  <path class="ln-b" d="M222 85 H276" marker-end="url(#ar-b)"/>
+  <rect class="bx-a" x="280" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-a" x="380" y="80" text-anchor="middle">被测类</text>
+  <text class="sm" x="380" y="100" text-anchor="middle">做它的事</text>
+  <path class="ln-g" d="M482 85 H536" marker-end="url(#ar-g)"/>
+  <rect class="bx-g" x="540" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-g" x="640" y="68" text-anchor="middle">可观察性</text>
+  <text class="sm" x="640" y="90" text-anchor="middle">能轻松看到它的返回值、</text>
+  <text class="sm" x="640" y="106" text-anchor="middle">状态变化和对外交互</text>
+  <text class="sm" x="380" y="160" text-anchor="middle">两者都容易，测试就容易</text>
+</svg>
+<figcaption>图 7-3　可测试性的两个支柱</figcaption>
+</figure>
+
+<p>实现可控性最常用的策略就是第 6 章的做法：如果一个类依赖另一个类，就让这个依赖可以被 Mock、Fake 或 Stub 轻松替换。看看同样的逻辑，写得很差的版本：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/domain/VeryBadPaidShoppingCartsBatch.java"><pre>
+public class VeryBadPaidShoppingCartsBatch {
+  public void processAll() {
+    ShoppingCartHibernateDao db = new ShoppingCartHibernateDao();        // 直接 new 适配器：不可测！
+    List&lt;ShoppingCart&gt; paidShoppingCarts = db.cartsPaidToday();
+    for (ShoppingCart cart : paidShoppingCarts) {
+      DeliveryCenterRestApi deliveryCenter = new DeliveryCenterRestApi(); // 不可测！
+      LocalDate estimatedDayOfDelivery = deliveryCenter.deliver(cart);
+
+      cart.markAsReadyForDelivery(estimatedDayOfDelivery);
+      db.persist(cart);
+
+      SMTPCustomerNotifier notifier = new SMTPCustomerNotifier();        // 不可测！
+      notifier.sendEstimatedDeliveryNotification(cart);
+
+      SAPSoapWebService sap = new SAPSoapWebService();                   // 不可测！
+      sap.cartReadyForDelivery(cart);
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="very_bad_paid_shopping_carts_batch.py"><pre>
+from adapters import (ShoppingCartSqlAlchemyRepository, DeliveryCenterRestApi,
+                      SMTPCustomerNotifier, SAPSoapWebService)
+
+class VeryBadPaidShoppingCartsBatch:
+    def process_all(self) -&gt; None:
+        db = ShoppingCartSqlAlchemyRepository()             # 直接创建适配器：不可测！
+        for cart in db.carts_paid_today():
+            estimated = DeliveryCenterRestApi().deliver(cart)            # 不可测！
+            cart.mark_as_ready_for_delivery(estimated)
+            db.persist(cart)
+            SMTPCustomerNotifier().send_estimated_delivery_notification(cart)  # 不可测！
+            SAPSoapWebService().cart_ready_for_delivery(cart)            # 不可测！
+</pre></div>
+<div class="code" data-lang="ts" data-file="veryBadPaidShoppingCartsBatch.ts"><pre>
+export class VeryBadPaidShoppingCartsBatch {
+  processAll(): void {
+    const db = new ShoppingCartPrismaRepository();          // 直接 new 适配器：不可测！
+    for (const cart of db.cartsPaidToday()) {
+      const estimated = new DeliveryCenterRestApi().deliver(cart);              // 不可测！
+      cart.markAsReadyForDelivery(estimated);
+      db.persist(cart);
+      new SMTPCustomerNotifier().sendEstimatedDeliveryNotification(cart);       // 不可测！
+      new SAPSoapWebService().cartReadyForDelivery(cart);                       // 不可测！
+    }
+  }
+}
+</pre></div>
+</div>
+
+<p>几乎一模一样的实现，却难测得多。<strong>写出不可测的代码就是这么容易。</strong>让依赖可以被注入（通过构造函数，复杂情况下通过 setter）会在很多方面改善代码：</p>
+
+<div class="cards">
+  <div class="card"><h4>能 Mock</h4><p>测试时可以 Mock 或 Stub 依赖，提高测试阶段的效率。</p></div>
+  <div class="card"><h4>依赖显式化</h4><p>所有依赖都必须被注入，一眼就能看出这个类需要什么。</p></div>
+  <div class="card"><h4>关注点分离</h4><p>类不必操心如何构造它的依赖。</p></div>
+  <div class="card"><h4>更易扩展</h4><p>与测试无关，但调用方可以通过构造函数传入任何实现。</p></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 依赖注入框架</div>
+  <p>Java 有 Spring、Google Guice；Python 有 dependency-injector、FastAPI 的 <code>Depends</code>；TypeScript 有 NestJS、InversifyJS、tsyringe。只要类允许注入依赖，这些框架就能在生产环境自动帮你构建类及其依赖树。测试时通常不需要它们 —— 手动把 Mock 传进去就行。</p>
+</div>
+
+<h3>依赖倒置原则</h3>
+
+<p>为领域与基础设施之间的交互设计抽象的接口（端口），能更好地分离关注点、降低层与层之间的耦合。<strong>依赖倒置原则</strong>（注意是 inversion 倒置，不是 injection 注入）把这些概念形式化：</p>
+
+<ol class="steps">
+  <li>高层模块（如业务类）不应该依赖低层模块，两者都应该依赖<strong>抽象</strong>（如接口）。</li>
+  <li>抽象不应该依赖细节，细节（具体实现）应该依赖抽象。</li>
+</ol>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="依赖倒置原则：高层类和低层类互不认识，都依赖中间的接口">
+  <text class="sm" x="20" y="24">高层模块</text>
+  <rect class="bx-a" x="120" y="30" width="200" height="50" rx="10"/><text class="ttl on-a" x="220" y="54" text-anchor="middle">高层类</text><text class="sm" x="220" y="70" text-anchor="middle">如领域对象</text>
+  <rect class="bx-a" x="440" y="30" width="200" height="50" rx="10"/><text class="ttl on-a" x="540" y="60" text-anchor="middle">高层类</text>
+  <rect class="bx-b" x="170" y="110" width="160" height="36" rx="8"/><text class="ttl on-b" x="250" y="133" text-anchor="middle">接口</text>
+  <rect class="bx-b" x="430" y="110" width="160" height="36" rx="8"/><text class="ttl on-b" x="510" y="133" text-anchor="middle">接口</text>
+  <path class="ln" d="M220 82 L240 106" marker-end="url(#ar)"/>
+  <path class="ln" d="M540 82 L520 106" marker-end="url(#ar)"/>
+  <path class="ln" d="M320 72 L440 114" marker-end="url(#ar)"/>
+  <path class="ln-d" d="M20 94 H740"/>
+  <text class="sm" x="20" y="200">低层模块</text>
+  <rect class="bx-g" x="90" y="180" width="170" height="50" rx="10"/><text class="ttl on-g" x="175" y="204" text-anchor="middle">低层类</text><text class="sm" x="175" y="220" text-anchor="middle">如数据库适配器</text>
+  <rect class="bx-g" x="300" y="180" width="170" height="50" rx="10"/><text class="ttl on-g" x="385" y="210" text-anchor="middle">低层类</text>
+  <rect class="bx-g" x="510" y="180" width="170" height="50" rx="10"/><text class="ttl on-g" x="595" y="210" text-anchor="middle">低层类</text>
+  <path class="ln-g" d="M175 178 L230 150" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M385 178 L280 150" marker-end="url(#ar-g)"/>
+  <path class="ln-g" d="M595 178 L530 150" marker-end="url(#ar-g)"/>
+  <text class="sm" x="740" y="170" text-anchor="end">箭头都指向抽象：高层和低层互不认识</text>
+</svg>
+<figcaption>图 7-4　依赖倒置：让依赖都指向抽象</figcaption>
+</figure>
+
+<p>
+  规律是：<strong>尽量依赖抽象，尽量少依赖细节</strong>。抽象不那么脆弱，也不那么容易变；你不会希望每次低层细节一变，代码就得跟着改。
+  当然，给所有东西建接口工作量太大。作者更在意的是：每个类都对使用者提供清晰的接口，不泄露内部细节 —— 也就是良好的<strong>封装</strong>。
+</p>
+<p>
+  这和测试有什么关系？单元测试时你会 Mock 依赖，而 Mock 时自然要依赖被 Mock 类提供的契约。被 Mock 的类越复杂，测试越难写。
+  按端口与适配器、依赖倒置的思路设计，端口的接口自然简单、内聚、直截了当。比如 <code>cartsPaidToday()</code>，一看就知道干什么，Mock 它轻而易举；
+  而它的适配器实现可能满是数据库代码和 SQL。<strong>把端口设计得简单，代码也就更容易测。</strong>
+</p>
+
+<h2 id="observability">让类和方法可观察</h2>
+
+<p>
+  可观察性是指<strong>断言功能行为是否符合预期有多容易</strong>。建议：让类为开发者提供简单的方式来断言它的状态。
+  类生成了一个对象列表要逐一断言？提供一个 getListOfSomething。类调用了别的类？确保这些依赖可以被 Mock。类内部改了很多属性但没法（或不该）提供 getter？提供一个简单的 <code>isValid()</code>。
+  <strong>不要害怕为了方便测试引入简单的 getter 或简单的方案。</strong>
+</p>
+
+<h3>例 1：增加方法来方便断言</h3>
+
+<p>
+  上面的测试里，<code>verify(someCart).markAsReadyForDelivery(someDate)</code> 用了 spy。每当需要 spy 来断言行为时，都该问问自己：<strong>为什么需要 spy？有没有更简单的办法？</strong>
+  这里我们只想知道处理之后购物车是否「待发货」。给 ShoppingCart 加一个 <code>isReadyForDelivery()</code>，它就更可观察了：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/domain/ShoppingCart.java"><pre>
+public class ShoppingCart {
+  private boolean readyForDelivery = false;
+  private double value = 0;
+
+  public ShoppingCart(double value) {
+    this.value = value;
+  }
+
+  public void markAsReadyForDelivery(LocalDate estimatedDayOfDelivery) {
+    this.readyForDelivery = true;
+    // ……
+  }
+
+  public boolean isReadyForDelivery() {     // 为提高可观察性而新增
+    return readyForDelivery;
+  }
+
+  public double getValue() {
+    return this.value;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="shopping_cart.py"><pre>
+from datetime import date
+
+class ShoppingCart:
+    def __init__(self, value: float):
+        self.value = value
+        self._ready_for_delivery = False
+
+    def mark_as_ready_for_delivery(self, estimated_day_of_delivery: date) -&gt; None:
+        self._ready_for_delivery = True
+        # ……
+
+    def is_ready_for_delivery(self) -&gt; bool:     # 为提高可观察性而新增
+        return self._ready_for_delivery
+</pre></div>
+<div class="code" data-lang="ts" data-file="shoppingCart.ts"><pre>
+export class ShoppingCart {
+  private readyForDelivery = false;
+
+  constructor(readonly value: number) {}
+
+  markAsReadyForDelivery(estimatedDayOfDelivery: Date): void {
+    this.readyForDelivery = true;
+    // ……
+  }
+
+  isReadyForDelivery(): boolean {               // 为提高可观察性而新增
+    return this.readyForDelivery;
+  }
+}
+</pre></div>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/PaidShoppingCartsBatchTest.java（不再需要 spy）"><pre>
+@Test
+void happyPath() {
+  PaidShoppingCartsBatch batch = new PaidShoppingCartsBatch(db, deliveryCenter, notifier, sap);
+
+  ShoppingCart someCart = new ShoppingCart(100);          // 普通对象，不用 spy
+  assertThat(someCart.isReadyForDelivery()).isFalse();
+
+  LocalDate someDate = LocalDate.now();
+  when(db.cartsPaidToday()).thenReturn(Arrays.asList(someCart));
+  when(deliveryCenter.deliver(someCart)).thenReturn(someDate);
+
+  batch.processAll();
+
+  verify(deliveryCenter).deliver(someCart);
+  verify(notifier).sendEstimatedDeliveryNotification(someCart);
+  verify(db).persist(someCart);
+  verify(sap).cartReadyForDelivery(someCart);
+  assertThat(someCart.isReadyForDelivery()).isTrue();     // 普通断言代替 Mockito 验证
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_paid_shopping_carts_batch.py（不再需要 spy）"><pre>
+def test_happy_path():
+    db, delivery_center, notifier, sap = Mock(), Mock(), Mock(), Mock()
+    batch = PaidShoppingCartsBatch(db, delivery_center, notifier, sap)
+
+    some_cart = ShoppingCart(100)                         # 普通对象，不用 spy
+    assert not some_cart.is_ready_for_delivery()
+
+    db.carts_paid_today.return_value = [some_cart]
+    delivery_center.deliver.return_value = date.today()
+
+    batch.process_all()
+
+    delivery_center.deliver.assert_called_once_with(some_cart)
+    notifier.send_estimated_delivery_notification.assert_called_once_with(some_cart)
+    db.persist.assert_called_once_with(some_cart)
+    sap.cart_ready_for_delivery.assert_called_once_with(some_cart)
+    assert some_cart.is_ready_for_delivery()              # 普通断言代替 Mock 验证
+</pre></div>
+<div class="code" data-lang="ts" data-file="paidShoppingCartsBatch.test.ts（不再需要 spy）"><pre>
+test("happy path", () =&gt; {
+  const someCart = new ShoppingCart(100);                 // 普通对象，不用 spy
+  expect(someCart.isReadyForDelivery()).toBe(false);
+
+  const db = { cartsPaidToday: vi.fn(() =&gt; [someCart]), persist: vi.fn() };
+  const deliveryCenter = { deliver: vi.fn(() =&gt; new Date()) };
+  const notifier = { sendEstimatedDeliveryNotification: vi.fn() };
+  const sap = { cartReadyForDelivery: vi.fn() };
+
+  new PaidShoppingCartsBatch(db, deliveryCenter, notifier, sap).processAll();
+
+  expect(deliveryCenter.deliver).toHaveBeenCalledWith(someCart);
+  expect(notifier.sendEstimatedDeliveryNotification).toHaveBeenCalledWith(someCart);
+  expect(db.persist).toHaveBeenCalledWith(someCart);
+  expect(sap.cartReadyForDelivery).toHaveBeenCalledWith(someCart);
+  expect(someCart.isReadyForDelivery()).toBe(true);       // 普通断言代替 Mock 验证
+});
+</pre></div>
+</div>
+
+<p>不要把「加一个 getter」当成解决所有可观察性问题的万能药。抽象出来的要点是：我们发现断言「购物车已标记为待发货」不直观（需要 spy），于是重新审视代码，找了一个简单的办法让测试知道这件事。这里恰好是 getter。</p>
+
+<h3>例 2：观察 void 方法的行为</h3>
+
+<p>方法有返回值时，断言返回值很自然。可 void 方法什么都不返回，断言什么？如果要断言的东西还留在方法内部，就更麻烦了。下面这个方法根据购物车生成分期付款：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/domain/InstallmentGenerator.java"><pre>
+public class InstallmentGenerator {
+  private InstallmentRepository repository;       // 可以注入桩
+
+  public InstallmentGenerator(InstallmentRepository repository) {
+    this.repository = repository;
+  }
+
+  public void generateInstallments(ShoppingCart cart, int numberOfInstallments) {
+    LocalDate nextInstallmentDueDate = LocalDate.now();          // 上一期的日期
+    double amountPerInstallment = cart.getValue() / numberOfInstallments;   // 每期金额
+
+    for (int i = 1; i &lt;= numberOfInstallments; i++) {
+      nextInstallmentDueDate = nextInstallmentDueDate.plusMonths(1);        // 每期间隔一个月
+      Installment newInstallment = new Installment(nextInstallmentDueDate, amountPerInstallment);
+      repository.persist(newInstallment);                                  // 创建并持久化
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="installment_generator.py"><pre>
+import calendar
+from dataclasses import dataclass
+from datetime import date
+
+def add_months(d: date, n: int) -&gt; date:
+    """和 Java 的 plusMonths 一样：目标月份没有这一天时，取该月最后一天。"""
+    m = d.month - 1 + n
+    y, m = d.year + m // 12, m % 12 + 1
+    return d.replace(year=y, month=m, day=min(d.day, calendar.monthrange(y, m)[1]))
+
+@dataclass(frozen=True)
+class Installment:
+    date: date
+    value: float
+
+class InstallmentGenerator:
+    def __init__(self, repository):              # 可以注入桩
+        self._repository = repository
+
+    def generate_installments(self, cart, number_of_installments: int) -&gt; None:
+        next_due_date = date.today()                                 # 上一期的日期
+        amount = cart.value / number_of_installments                 # 每期金额
+        for _ in range(number_of_installments):
+            next_due_date = add_months(next_due_date, 1)             # 每期间隔一个月
+            self._repository.persist(Installment(next_due_date, amount))   # 创建并持久化
+</pre></div>
+<div class="code" data-lang="ts" data-file="installmentGenerator.ts"><pre>
+/** 和 Java 的 plusMonths 一样：目标月份没有这一天时，取该月最后一天。 */
+export function addMonths(d: Date, n: number): Date {
+  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(d.getDate(), lastDay));
+}
+
+export interface Installment { date: Date; value: number }
+export interface InstallmentRepository { persist(installment: Installment): void }
+
+export class InstallmentGenerator {
+  constructor(private readonly repository: InstallmentRepository) {}   // 可以注入桩
+
+  generateInstallments(cart: { value: number }, numberOfInstallments: number): void {
+    let nextDueDate = new Date();                                     // 上一期的日期
+    const amount = cart.value / numberOfInstallments;                 // 每期金额
+    for (let i = 1; i &lt;= numberOfInstallments; i++) {
+      nextDueDate = addMonths(nextDueDate, 1);                        // 每期间隔一个月
+      this.repository.persist({ date: nextDueDate, value: amount });  // 创建并持久化
+    }
+  }
+}
+</pre></div>
+</div>
+
+<p>要测它，就得检查新生成的分期金额和日期是否正确。可 Installment 在方法内部创建、交给仓储后就没了。熟悉 Mock 框架的话，你知道可以用<strong>参数捕获</strong>拿到传给 Mock 的所有对象：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch7/InstallmentGeneratorTest.java（参数捕获）"><pre>
+@ExtendWith(MockitoExtension.class)
+public class InstallmentGeneratorTest {
+  @Mock private InstallmentRepository repository;
+
+  @Test
+  void checkInstallments() {
+    InstallmentGenerator generator = new InstallmentGenerator(repository);
+    ShoppingCart cart = new ShoppingCart(100.0);
+
+    generator.generateInstallments(cart, 10);             // 返回 void，得想更聪明的办法
+
+    ArgumentCaptor&lt;Installment&gt; captor = ArgumentCaptor.forClass(Installment.class);
+    verify(repository, times(10)).persist(captor.capture());
+    List&lt;Installment&gt; allInstallments = captor.getAllValues();   // 拿到传给仓储的全部分期
+
+    assertThat(allInstallments)
+        .hasSize(10)
+        .allMatch(i -&gt; i.getValue() == 10);               // 每期 10.0
+
+    for (int month = 1; month &lt;= 10; month++) {           // 每期间隔一个月
+      final LocalDate dueDate = LocalDate.now().plusMonths(month);
+      assertThat(allInstallments).anyMatch(i -&gt; i.getDate().equals(dueDate));
+    }
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_installment_generator.py（参数捕获）"><pre>
+from datetime import date
+from unittest.mock import Mock
+from installment_generator import InstallmentGenerator, add_months
+from shopping_cart import ShoppingCart
+
+def test_check_installments():
+    repository = Mock()
+    generator = InstallmentGenerator(repository)
+
+    generator.generate_installments(ShoppingCart(100.0), 10)   # 返回 None
+
+    assert repository.persist.call_count == 10
+    all_installments = [c.args[0] for c in repository.persist.call_args_list]   # 全部调用的参数
+
+    assert all(i.value == 10 for i in all_installments)        # 每期 10.0
+    dates = {i.date for i in all_installments}
+    for month in range(1, 11):                                 # 每期间隔一个月
+        assert add_months(date.today(), month) in dates
+</pre></div>
+<div class="code" data-lang="ts" data-file="installmentGenerator.test.ts（参数捕获）"><pre>
+import { test, expect, vi } from "vitest";
+import { InstallmentGenerator, addMonths } from "./installmentGenerator";
+
+const sameDay = (a: Date, b: Date) =&gt; a.toDateString() === b.toDateString();
+
+test("check installments", () =&gt; {
+  const repository = { persist: vi.fn() };
+  const generator = new InstallmentGenerator(repository);
+
+  generator.generateInstallments({ value: 100 }, 10);           // 返回 void
+
+  expect(repository.persist).toHaveBeenCalledTimes(10);
+  const all = repository.persist.mock.calls.map(([inst]) =&gt; inst);   // 全部调用的参数
+
+  expect(all.every((i) =&gt; i.value === 10)).toBe(true);          // 每期 10
+  for (let month = 1; month &lt;= 10; month++) {                   // 每期间隔一个月
+    const due = addMonths(new Date(), month);
+    expect(all.some((i) =&gt; sameDay(i.date, due))).toBe(true);
+  }
+});
+</pre></div>
+</div>
+
+<p>参数捕获让测试成为可能，测 void 方法时很好用。但按照「简单」的思路：如果有个「拿到所有生成的分期」的方法就更简单了。让 <code>generateInstallments</code> 直接返回生成的列表，改动很小：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="InstallmentGenerator（返回列表）"><pre>
+public List&lt;Installment&gt; generateInstallments(ShoppingCart cart, int numberOfInstallments) {
+  List&lt;Installment&gt; generatedInstallments = new ArrayList&lt;Installment&gt;();   // 记录生成的分期
+
+  LocalDate nextInstallmentDueDate = LocalDate.now();
+  double amountPerInstallment = cart.getValue() / numberOfInstallments;
+  for (int i = 1; i &lt;= numberOfInstallments; i++) {
+    nextInstallmentDueDate = nextInstallmentDueDate.plusMonths(1);
+    Installment newInstallment = new Installment(nextInstallmentDueDate, amountPerInstallment);
+    repository.persist(newInstallment);
+    generatedInstallments.add(newInstallment);
+  }
+  return generatedInstallments;                                             // 返回它们
+}
+
+// 测试里不再需要 ArgumentCaptor：
+List&lt;Installment&gt; allInstallments = generator.generateInstallments(cart, 10);
+</pre></div>
+<div class="code" data-lang="python" data-file="installment_generator.py（返回列表）"><pre>
+    def generate_installments(self, cart, number_of_installments: int) -&gt; list[Installment]:
+        generated = []                                             # 记录生成的分期
+        next_due_date = date.today()
+        amount = cart.value / number_of_installments
+        for _ in range(number_of_installments):
+            next_due_date = add_months(next_due_date, 1)
+            installment = Installment(next_due_date, amount)
+            self._repository.persist(installment)
+            generated.append(installment)
+        return generated                                           # 返回它们
+
+# 测试里不再需要翻 call_args_list：
+all_installments = generator.generate_installments(ShoppingCart(100.0), 10)
+</pre></div>
+<div class="code" data-lang="ts" data-file="installmentGenerator.ts（返回列表）"><pre>
+  generateInstallments(cart: { value: number }, numberOfInstallments: number): Installment[] {
+    const generated: Installment[] = [];                            // 记录生成的分期
+    let nextDueDate = new Date();
+    const amount = cart.value / numberOfInstallments;
+    for (let i = 1; i &lt;= numberOfInstallments; i++) {
+      nextDueDate = addMonths(nextDueDate, 1);
+      const installment = { date: nextDueDate, value: amount };
+      this.repository.persist(installment);
+      generated.push(installment);
+    }
+    return generated;                                               // 返回它们
+  }
+
+// 测试里不再需要翻 mock.calls：
+const all = generator.generateInstallments({ value: 100 }, 10);
+</pre></div>
+</div>
+
+<p>同样不要照搬这个例子。只要记住：<strong>能提升可测试性的小设计改动是可以的</strong>。有时很难判断一个改动会不会让设计变差 —— 试试看，不喜欢就扔掉。务实是关键。</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 真实发现：这个测试每年会莫名失败约 25 天</div>
+  <p>
+    仔细看：生成器是<strong>一个月一个月地累加</strong>（<code>next = next.plusMonths(1)</code>），测试却是<strong>从今天直接加 k 个月</strong>（<code>now().plusMonths(k)</code>）。
+    两者在月末会分道扬镳：如果今天是 1 月 31 日，生成器得到 2 月 28 日 → 3 月 28 日 → …，测试却期望 3 月 31 日。
+    我们用 Java 把 2026 年每一天都模拟了一遍：<strong>有 25 天，仓库里的 <code>InstallmentGeneratorTest</code> 会失败</strong>（比如从 1 月 29–31 日、3 月 31 日、5 月 29–31 日开始的日子）。
+    Python 和 TypeScript 版本用了同样的「月末取最后一天」规则，行为完全一致。
+  </p>
+  <p>
+    这是一个典型的<strong>不稳定测试（flaky test）</strong>：它不依赖你改了什么代码，而依赖你在哪天运行它。根源有两个：
+    ① 生产代码和测试代码都偷偷调用了「今天」，测试无法控制它 —— 缺乏<strong>可控性</strong>；
+    ② 需求本身有歧义：1 月 31 日开始的分期，第二期该是 3 月 28 日还是 3 月 31 日？这要问产品负责人。
+    修复方法正是本章的内容：把「今天」变成可注入的依赖（或参数），然后用 1 月 31 日这样的边界日期写一个确定的测试。
+  </p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="修复：注入「起始日期」，并固定为边界日期测试"><pre>
+public List&lt;Installment&gt; generateInstallments(ShoppingCart cart, int n, LocalDate start) {
+  List&lt;Installment&gt; generated = new ArrayList&lt;&gt;();
+  double amount = cart.getValue() / n;
+  for (int i = 1; i &lt;= n; i++) {
+    // 每期都从起始日期算（假设产品负责人确认了：始终锚定起始日）
+    Installment inst = new Installment(start.plusMonths(i), amount);
+    repository.persist(inst);
+    generated.add(inst);
+  }
+  return generated;
+}
+
+@Test
+void installmentsStartingAtTheEndOfTheMonth() {
+  LocalDate jan31 = LocalDate.of(2026, 1, 31);         // 确定、可复现的边界日期
+  List&lt;Installment&gt; all = generator.generateInstallments(new ShoppingCart(100.0), 3, jan31);
+  assertThat(all).extracting(Installment::getDate).containsExactly(
+      LocalDate.of(2026, 2, 28), LocalDate.of(2026, 3, 31), LocalDate.of(2026, 4, 30));
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="修复：注入「起始日期」，并固定为边界日期测试"><pre>
+    def generate_installments(self, cart, n: int, start: date) -&gt; list[Installment]:
+        amount = cart.value / n
+        generated = []
+        for i in range(1, n + 1):
+            # 每期都从起始日期算（假设产品负责人确认了：始终锚定起始日）
+            inst = Installment(add_months(start, i), amount)
+            self._repository.persist(inst)
+            generated.append(inst)
+        return generated
+
+def test_installments_starting_at_the_end_of_the_month():
+    jan31 = date(2026, 1, 31)                           # 确定、可复现的边界日期
+    result = InstallmentGenerator(Mock()).generate_installments(ShoppingCart(100.0), 3, jan31)
+    assert [i.date for i in result] == [date(2026, 2, 28), date(2026, 3, 31), date(2026, 4, 30)]
+</pre></div>
+<div class="code" data-lang="ts" data-file="修复：注入「起始日期」，并固定为边界日期测试"><pre>
+  generateInstallments(cart: { value: number }, n: number, start: Date): Installment[] {
+    const amount = cart.value / n;
+    const generated: Installment[] = [];
+    for (let i = 1; i &lt;= n; i++) {
+      // 每期都从起始日期算（假设产品负责人确认了：始终锚定起始日）
+      const inst = { date: addMonths(start, i), value: amount };
+      this.repository.persist(inst);
+      generated.push(inst);
+    }
+    return generated;
+  }
+
+test("installments starting at the end of the month", () =&gt; {
+  const jan31 = new Date(2026, 0, 31);                  // 确定、可复现的边界日期（0 = 一月）
+  const result = new InstallmentGenerator({ persist: vi.fn() })
+    .generateInstallments({ value: 100 }, 3, jan31);
+  expect(result.map((i) =&gt; i.date.toDateString())).toEqual(
+    [new Date(2026, 1, 28), new Date(2026, 2, 31), new Date(2026, 3, 30)].map((d) =&gt; d.toDateString()));
+});
+</pre></div>
+</div>
+
+<h2 id="ctor-or-param">依赖从构造函数来，还是值从参数来？</h2>
+
+<p>一个很常见的设计决定：把<strong>依赖</strong>通过构造函数传给类（类再用它获取所需的值），还是直接把<strong>值</strong>传给方法？回到 ChristmasDiscount：</p>
+
+<div class="vs">
+  <div class="old"><div class="h">A：依赖从构造函数来（第 6 章的写法）</div>
+    <div class="langs" style="margin:0">
+<div class="code" data-lang="java"><pre>
+public class ChristmasDiscount {
+  private final Clock clock;
+  public ChristmasDiscount(Clock clock) {
+    this.clock = clock;
+  }
+  public double applyDiscount(double rawAmount) {
+    LocalDate today = clock.now();
+    // ……
+  }
+}
+</pre></div>
+<div class="code" data-lang="python"><pre>
+class ChristmasDiscount:
+    def __init__(self, clock: Clock):
+        self._clock = clock
+
+    def apply_discount(self, raw_amount):
+        today = self._clock.now()
+        # ……
+</pre></div>
+<div class="code" data-lang="ts"><pre>
+class ChristmasDiscount {
+  constructor(private clock: Clock) {}
+
+  applyDiscount(rawAmount: number) {
+    const today = this.clock.now();
+    // ……
+  }
+}
+</pre></div>
+    </div></div>
+  <div class="new"><div class="h">B：值从方法参数来</div>
+    <div class="langs" style="margin:0">
+<div class="code" data-lang="java"><pre>
+public class ChristmasDiscount {
+  public double applyDiscount(double rawAmount,
+                              LocalDate today) {
+    double discountPercentage = 0;
+    boolean isChristmas =
+        today.getMonth() == Month.DECEMBER
+        &amp;&amp; today.getDayOfMonth() == 25;
+    // ……
+  }
+}
+</pre></div>
+<div class="code" data-lang="python"><pre>
+class ChristmasDiscount:
+    def apply_discount(self, raw_amount,
+                       today: date):
+        is_christmas = (today.month == 12
+                        and today.day == 25)
+        # ……
+</pre></div>
+<div class="code" data-lang="ts"><pre>
+class ChristmasDiscount {
+  applyDiscount(rawAmount: number,
+                today: Date) {
+    const isChristmas = today.getMonth() === 11
+      &amp;&amp; today.getDate() === 25;
+    // ……
+  }
+}
+</pre></div>
+    </div></div>
+</div>
+
+<p>B 连 Mock 都不需要，传任意日期就能测。那为什么还要用 A？</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="两种方案把对 Clock 的依赖放在不同位置：方案 A 放在 ChristmasDiscount 里，方案 B 推给了所有调用者">
+  <text class="ttl" x="190" y="22" text-anchor="middle">A：依赖放在类里</text>
+  <rect class="bx" x="40" y="40" width="130" height="40" rx="8"/><text class="lbl" x="105" y="65" text-anchor="middle">调用者 1</text>
+  <rect class="bx" x="210" y="40" width="130" height="40" rx="8"/><text class="lbl" x="275" y="65" text-anchor="middle">调用者 2</text>
+  <rect class="bx-a" x="110" y="112" width="160" height="40" rx="8"/><text class="lbl on-a" x="190" y="137" text-anchor="middle">ChristmasDiscount</text>
+  <rect class="bx-b" x="140" y="180" width="100" height="36" rx="8"/><text class="lbl on-b" x="190" y="203" text-anchor="middle">Clock</text>
+  <path class="ln" d="M105 82 L170 108" marker-end="url(#ar)"/>
+  <path class="ln" d="M275 82 L210 108" marker-end="url(#ar)"/>
+  <path class="ln-b" d="M190 154 V176" marker-end="url(#ar-b)"/>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">B：依赖被推给调用者</text>
+  <rect class="bx" x="420" y="40" width="130" height="40" rx="8"/><text class="lbl" x="485" y="65" text-anchor="middle">调用者 1</text>
+  <rect class="bx" x="590" y="40" width="130" height="40" rx="8"/><text class="lbl" x="655" y="65" text-anchor="middle">调用者 2</text>
+  <rect class="bx-b" x="425" y="96" width="60" height="26" rx="6"/><text class="sm on-b" x="455" y="113" text-anchor="middle">Clock</text>
+  <rect class="bx-b" x="655" y="96" width="60" height="26" rx="6"/><text class="sm on-b" x="685" y="113" text-anchor="middle">Clock</text>
+  <path class="ln-b" d="M455 82 V94"/><path class="ln-b" d="M685 82 V94"/>
+  <rect class="bx-a" x="490" y="150" width="160" height="40" rx="8"/><text class="lbl on-a" x="570" y="175" text-anchor="middle">ChristmasDiscount</text>
+  <path class="ln" d="M500 82 L550 146" marker-end="url(#ar)"/>
+  <path class="ln" d="M640 82 L590 146" marker-end="url(#ar)"/>
+  <text class="sm" x="570" y="214" text-anchor="middle">类本身更简单，但每个调用者都得自己去拿「今天」</text>
+</svg>
+<figcaption>图 7-5　对 Clock 的依赖不会消失，只是换了个地方</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th></th><th>A：依赖从构造函数来</th><th>B：值从参数来</th></tr>
+  <tr><td>被测类本身</td><td>稍复杂：多一个依赖</td><td>最简单</td></tr>
+  <tr><td>被测类的测试</td><td>要 Stub 一个 Clock</td><td>直接传日期，无需 Mock</td></tr>
+  <tr><td>调用者</td><td>简单：只需调用 <code>applyDiscount(100.0)</code>；测调用者时 Stub 掉 ChristmasDiscount 就行，完全不用管 Clock</td><td>每个调用者都要自己获取当前日期 —— 通过 Clock。依赖被「推上去一层」</td></tr>
+</table>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="方案 A 下，测试调用者完全不用管 Clock"><pre>
+public class SomeBusinessService {
+  private final ChristmasDiscount discount;     // 注入 ChristmasDiscount 的桩
+
+  public SomeBusinessService(ChristmasDiscount discount) {
+    this.discount = discount;
+  }
+
+  public void doSomething() {
+    // ……一些业务逻辑……
+    discount.applyDiscount(100.0);
+    // ……继续……
+  }
+}
+
+@Test
+void test() {
+  ChristmasDiscount discount = Mockito.mock(ChristmasDiscount.class);   // 不需要 Clock
+  SomeBusinessService service = new SomeBusinessService(discount);
+  service.doSomething();
+  // ……
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="方案 A 下，测试调用者完全不用管 Clock"><pre>
+class SomeBusinessService:
+    def __init__(self, discount: ChristmasDiscount):   # 注入 ChristmasDiscount 的桩
+        self._discount = discount
+
+    def do_something(self) -&gt; None:
+        # ……一些业务逻辑……
+        self._discount.apply_discount(100.0)
+        # ……继续……
+
+def test_some_business_service():
+    discount = Mock(spec=ChristmasDiscount)           # 不需要 Clock
+    SomeBusinessService(discount).do_something()
+    # ……
+</pre></div>
+<div class="code" data-lang="ts" data-file="方案 A 下，测试调用者完全不用管 Clock"><pre>
+class SomeBusinessService {
+  constructor(private readonly discount: Pick&lt;ChristmasDiscount, "applyDiscount"&gt;) {}
+
+  doSomething(): void {
+    // ……一些业务逻辑……
+    this.discount.applyDiscount(100);
+    // ……继续……
+  }
+}
+
+test("some business service", () =&gt; {
+  const discount = { applyDiscount: vi.fn(() =&gt; 85) };   // 不需要 Clock
+  new SomeBusinessService(discount).doSomething();
+  // ……
+});
+</pre></div>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 作者的经验法则</div>
+  <p>构造函数接收依赖，让类和它的测试稍复杂，但简化了调用者；参数接收数据，让类和它的测试更简单，但让调用者稍复杂。软件工程就是权衡。作者总是<strong>选择简化调用者的工作</strong> —— 宁可 ChristmasDiscount 复杂一点、依赖 Clock，也不让所有调用者都去拿今天的日期。</p>
+</div>
+
+<h2 id="listen">倾听你的测试</h2>
+
+<p>如果你留心（很多开发者说「倾听」）你的测试，它们会给你关于代码设计的提示。因为测试代码做的全部事情，就是使用生产类：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="测试做的三件事，每一件的难易都反映了设计问题">
+  <rect class="bx-b" x="20" y="20" width="230" height="110" rx="12"/>
+  <text class="ttl on-b" x="135" y="46" text-anchor="middle">① 实例化被测类</text>
+  <text class="mono" x="135" y="72" text-anchor="middle">new A()</text>
+  <text class="sm" x="135" y="92" text-anchor="middle">还是</text>
+  <text class="mono" x="135" y="112" text-anchor="middle">new A(dep1, dep2, …)</text>
+  <rect class="bx-a" x="265" y="20" width="230" height="110" rx="12"/>
+  <text class="ttl on-a" x="380" y="46" text-anchor="middle">② 调用被测方法</text>
+  <text class="mono" x="380" y="72" text-anchor="middle">a.method()</text>
+  <text class="sm" x="380" y="92" text-anchor="middle">还是</text>
+  <text class="mono" x="380" y="112" text-anchor="middle">a.pre1(); a.pre2(); a.m(…)</text>
+  <rect class="bx-g" x="510" y="20" width="230" height="110" rx="12"/>
+  <text class="ttl on-g" x="625" y="46" text-anchor="middle">③ 断言行为</text>
+  <text class="mono" x="625" y="72" text-anchor="middle">assertThat(r).isEqualTo(42)</text>
+  <text class="sm" x="625" y="92" text-anchor="middle">还是</text>
+  <text class="mono" x="625" y="112" text-anchor="middle">几十行代码去观察系统</text>
+  <text class="lbl on-b" x="135" y="160" text-anchor="middle">难？也许依赖太多</text>
+  <text class="lbl on-a" x="380" y="160" text-anchor="middle">难？也许前置条件太复杂</text>
+  <text class="lbl on-g" x="625" y="160" text-anchor="middle">难？也许可观察性太差</text>
+  <text class="sm" x="380" y="196" text-anchor="middle">时刻留意每一步有多难 —— 难写的测试往往在诉说设计问题</text>
+</svg>
+<figcaption>图 7-6　从测试的三个步骤里读出设计信号</figcaption>
+</figure>
+
+<p>下面是作者写测试时会留意的信号（它们只是症状，最终由你判断；也只基于作者的经验，并未经过科学验证）：</p>
+
+<h3>被测类的内聚性</h3>
+<p>内聚是指一个模块、类或方法只有一个职责。多职责的类天生更复杂、更难理解。</p>
+<ul>
+  <li><strong>非内聚的类有非常大的测试集。</strong>留意你为一个类或方法写了多少测试。如果超出了你认为合理的程度，也许该重新审视它的职责了。常见的重构是一分为二。</li>
+  <li><strong>非内聚的类的测试集永远在增长。</strong>你期望类在某个时候趋于稳定。如果总是回到同一个测试类加新测试，可能是设计不好，通常是缺少合适的抽象 ——
+    这同时违反了 SOLID 的单一职责原则（SRP）和开闭原则（OCP）。常见的重构是建一个抽象代表不同的角色，把每条计算规则移到自己的类里（可以搜一搜<strong>策略模式</strong>）。</li>
+</ul>
+
+<h3>被测类的耦合度</h3>
+<ul>
+  <li><strong>测试代码里要实例化很多依赖</strong>，可能是个信号。考虑重新设计，比如把这个类实现的大行为拆成两步。有时耦合不可避免，我们能做的只是更好地管理它。</li>
+  <li><strong>ATest（本应测 A）失败了，调试后发现问题出在 B</strong>。这是依赖问题的明显信号：B 的问题泄漏到了 A。该重新评估这些类如何耦合、如何交互了。</li>
+</ul>
+
+<h3>复杂条件与可测试性</h3>
+<p>非常复杂的条件（由多个布尔运算组成的 if）要求测试者付出大量努力：做了边界测试或条件+分支覆盖后，用例可能多得惊人。把它们拆成多个更小的条件不会减少问题的总复杂度，但至少能把它分散开。</p>
+
+<h3>私有方法与可测试性</h3>
+<p>
+  要不要测私有方法？原则上只通过公有方法测它。但测试者常常忍不住想单独测某个私有方法 —— 常见原因是缺乏内聚，或者这个私有方法太复杂。
+  这正是测试在对你说话：<strong>这个私有方法可能不属于它现在的位置</strong>。常见的重构是把它提取出来，也许放进一个全新的类。在那里，原来的私有方法变成公有方法，可以正常测试；原来的类则依赖这个新类。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="把复杂的私有方法提取到新类中，使其可以独立测试">
+  <rect class="bx-r" x="20" y="30" width="260" height="100" rx="12"/>
+  <text class="ttl" x="150" y="54" text-anchor="middle">OrderService</text>
+  <text class="mono" x="40" y="80">+ process()</text>
+  <text class="mono on-r" x="40" y="104">- calculateComplexTax()  😣</text>
+  <text class="sm on-r" x="150" y="148" text-anchor="middle">想单独测私有方法？</text>
+  <path class="ln-a" d="M290 80 H370" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="330" y="70" text-anchor="middle">提取类</text>
+  <rect class="bx-g" x="380" y="30" width="170" height="100" rx="12"/>
+  <text class="ttl" x="465" y="54" text-anchor="middle">OrderService</text>
+  <text class="mono" x="400" y="84">+ process()</text>
+  <text class="sm" x="465" y="112" text-anchor="middle">依赖 TaxCalculator</text>
+  <path class="ln" d="M552 80 H586" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="590" y="30" width="150" height="100" rx="12"/>
+  <text class="ttl" x="665" y="54" text-anchor="middle">TaxCalculator</text>
+  <text class="mono on-g" x="665" y="84" text-anchor="middle">+ calculate()</text>
+  <text class="sm on-g" x="665" y="112" text-anchor="middle">公有，可直接测 ✔</text>
+</svg>
+<figcaption>图 7-7　「想测私有方法」往往是「这个方法应该属于别的类」的信号</figcaption>
+</figure>
+
+<h3>静态方法、单例与可测试性</h3>
+<p>
+  静态方法不利于可测试性，所以尽量避免创建它们（工具方法除外，它们通常不会被 Mock）。如果系统必须依赖某个静态方法（比如来自框架），在它之上加一层抽象 —— 就像上一章对 LocalDate 做的那样 —— 可能是个好决定。
+  外部依赖同理：别怕创建这些额外的层，看似增加了设计的复杂度，但提升的可测试性是值得的。
+</p>
+<p>
+  <strong>单例（Singleton）模式</strong>也损害可测试性。它保证整个系统中某个类只有一个实例，就像一个贯穿程序整个生命周期的全局变量。
+  测试使用单例的系统时，常常要在测试集里额外写代码，在不同用例之间重置或替换这个单例。
+</p>
+
+<h3>六边形架构与「把 Mock 当作设计技术」</h3>
+<p>
+  了解了端口和适配器，我们就能理解「Mock 派」（mockist）如何把 Mock 当作设计技术：开发一个功能时，发现需要某个外部的东西，就让一个<strong>端口浮现出来</strong>。
+  端口是一个接口，让你不必被适配器的具体实现打扰，继续开发功能的其余部分。Mock 派把这当作设计活动：思考端口应该向应用核心提供什么契约，建模出最好的接口。
+  作者也是这样：写一个类时发现需要别的东西，就让一个接口浮现出来代表它，想清楚需要什么，继续写；具体的适配器以后再实现。这让他能专注于手头的类。
+</p>
+
+<h3>延伸阅读</h3>
+<ul>
+  <li>Michael Feathers《修改代码的艺术》（Working Effectively with Legacy Code，2004）：大部分内容是关于不可测的代码以及如何让它可测。他在 YouTube 上还有一个关于「良好设计与可测试性之间的深层协同」的演讲（2013）。</li>
+  <li>Steve Freeman 和 Nat Pryce《测试驱动的面向对象软件开发》（2009）。</li>
+  <li>Robert Martin《整洁架构》（2018）。</li>
+</ul>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>写测试可能容易也可能很难，不可测的代码让我们的生活更艰难。努力写出容易（至少更容易）测试的代码。</li>
+  <li>把基础设施和领域代码分开。基础设施让测试更难写；分开后，领域逻辑的单元测试就便宜得多。</li>
+  <li>确保类容易控制、容易观察。可控性通常靠控制被测类的依赖来实现；可观察性靠类提供简便的方式让测试断言预期行为。</li>
+  <li>不要以你不认同的方式修改代码，但也要务实。作者完全支持为了方便测试而修改生产代码。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>7.1　三位开发者分别说：A「我没法断言被测方法是否正确工作」；B「我需要确保这个类以 false 的布尔值开始，但做不到」；C「我创建了 Mock，但没办法把它注入类中」。分别是可观察性还是可控性问题？</summary>
+<p><strong>A：可观察性；B：可控性；C：可控性。</strong></p></details>
+
+<details class="quiz"><summary>7.2　一个移动 App 团队说写单元测试「很难」，列出了问题：A 很多类混合了基础设施和业务规则；B 数据库表很大且没有索引；C 大量调用库和外部 API；D 有些类的属性/字段太多。预算只够先解决两个，该优先哪两个？</summary>
+<p><strong>A 和 C。</strong>领域与基础设施分离对可测试性至关重要 —— 一段既有业务规则又访问数据库或外部 API 的代码，你怎么给它写单元测试？至于 B，单元测试里数据库会被 Mock，表多大无所谓；D 意味着测试要多做一些准备工作，但并不妨碍写测试。</p></details>
+
+<details class="quiz"><summary>7.3　如何提升下面这个 OrderDeliveryBatch 的可测试性？</summary>
+<div class="langs">
+<div class="code" data-lang="java"><pre>
+public class OrderDeliveryBatch {
+  public void runBatch() {
+    OrderDao dao = new OrderDao();                          // 访问数据库
+    DeliveryStartProcess delivery = new DeliveryStartProcess();   // 调第三方 Web 服务
+    List&lt;Order&gt; orders = dao.paidButNotDelivered();
+    for (Order order : orders) {
+      delivery.start(order);
+      if (order.isInternational()) {
+        order.setDeliveryDate("5 days from now");
+      } else {
+        order.setDeliveryDate("2 days from now");
+      }
+    }
+  }
+}
+</pre></div>
+</div>
+<p>要对 runBatch 做单元测试，至少需要能对 dao 和 delivery 使用 Mock 或 Stub。当前实现做不到，因为无法从类外部替换它们 —— 需要提升<strong>可控性</strong>。让依赖可以被注入（依赖注入），就能使用 Mock 和 Stub。</p></details>
+
+<details class="quiz"><summary>7.4　怎样让 KingsDayDiscount（4 月 27 日国王节打折，内部调用 <code>Calendar.getInstance()</code>）更可测？</summary>
+<p>当前实现缺乏<strong>可控性</strong>：getInstance 是静态方法，无法改变它给出的值。虽然新版 Mockito 可以 Mock 静态方法，但应尽量避免。解决办法：要么把日期作为方法参数传入，要么注入一个 Clock（Calendar 或任何日期类之上的一层包装）。</p></details>
+
+<details class="quiz"><summary>7.5　想想你当前的项目：有难测的部分吗？能解释为什么吗？怎么让它更可测？</summary>
+<p>没有标准答案。试着用本章的三个问题检查：实例化难不难？调用难不难？断言难不难？</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch7</code> 目录跑 <code>mvn test</code>。然后思考：如果今天是 1 月 31 日，<code>InstallmentGeneratorTest</code> 会怎样？按上面的修复方法重构 <code>InstallmentGenerator</code>，写一个固定日期的测试。</li>
+    <li>试着为 <code>VeryBadPaidShoppingCartsBatch</code> 写单元测试（不许改代码）。你能做到什么程度？卡在哪里？</li>
+    <li>用 Python 或 TypeScript 实现练习 7.3 的 OrderDeliveryBatch 重构版本（依赖注入），并用 Mock 为国内/国际两种订单各写一个测试。</li>
+    <li>挑一个你项目里的私有方法，问自己：我想单独测它吗？如果想，它应该被提取到哪个类里？</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

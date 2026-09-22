@@ -1,0 +1,1378 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 3 章 · 结构化测试与代码覆盖率 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .tt td, .tt th { text-align: center; }
+  .tt .T { color: var(--green); font-weight: 700; }
+  .tt .F { color: var(--red); font-weight: 700; }
+  .tt tr.pick td { background: var(--accent-bg); }
+</style>
+</head>
+<body data-chapter="3">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 3 章</span>
+<h1>结构化测试与代码覆盖率</h1>
+<p class="lede">
+  规格测试做完了，接下来打开源代码。代码里有需求没写的实现细节，也藏着你分区时漏掉的情况。
+  覆盖率工具能一眼告诉你「哪些代码还没被测试执行过」。这一章教你<strong>正确地</strong>使用覆盖率：
+  把它当成找漏洞的放大镜，而不是一个需要刷的 KPI。最后还会介绍更狠的一招 —— 变异测试。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>用覆盖率报告找出测试没有执行到的代码，并思考「为什么漏了」</li>
+    <li>分清行覆盖、分支覆盖、条件+分支覆盖、路径覆盖和 MC/DC</li>
+    <li>学会为复杂条件手工推导 MC/DC 测试集</li>
+    <li>理解为什么只靠结构化测试不够，也理解为什么有人（错误地）讨厌覆盖率</li>
+    <li>用变异测试检验测试的「杀伤力」</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="right-way">正确使用覆盖率</h2>
+
+<p>为什么在规格测试之后还要看代码？两个原因：</p>
+<ul>
+  <li>分析需求时可能<strong>漏掉了一两个分区</strong>，看代码时会发现；</li>
+  <li>实现时会用到语言特性、算法和数据结构，这些<strong>实现细节在文档里看不到</strong>，同样需要测。</li>
+</ul>
+
+<p>先看一个小程序：统计一句话里有多少个单词以 "s" 或 "r" 结尾（改编自 CodingBat）：</p>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：CountWords</div>
+  <p>给定一个句子，统计以 "s" 或 "r" 结尾的单词个数。遇到非字母字符时，一个单词结束。返回单词数。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/CountWords.java"><pre>
+public class CountWords {
+  public int count(String str) {
+    int words = 0;
+    char last = ' ';
+
+    for (int i = 0; i &lt; str.length(); i++) {
+      // 当前是非字母，且上一个字符是 s 或 r → 一个单词结束了
+      if (!Character.isLetter(str.charAt(i)) &amp;&amp;
+          (last == 's' || last == 'r')) {
+        words++;
+      }
+      last = str.charAt(i);   // 记住当前字符
+    }
+
+    // 字符串以 r 或 s 结尾，最后一个单词也要算上
+    if (last == 'r' || last == 's')
+      words++;
+
+    return words;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="count_words.py"><pre>
+def count_words(s: str) -&gt; int:
+    words = 0
+    last = " "
+
+    for ch in s:
+        # 当前是非字母，且上一个字符是 s 或 r → 一个单词结束了
+        if not ch.isalpha() and (last == "s" or last == "r"):
+            words += 1
+        last = ch                 # 记住当前字符
+
+    # 字符串以 r 或 s 结尾，最后一个单词也要算上
+    if last == "r" or last == "s":
+        words += 1
+
+    return words
+</pre></div>
+<div class="code" data-lang="ts" data-file="countWords.ts"><pre>
+const isLetter = (ch: string) =&gt; /\p{L}/u.test(ch);
+
+export function countWords(str: string): number {
+  let words = 0;
+  let last = " ";
+
+  for (const ch of str) {
+    // 当前是非字母，且上一个字符是 s 或 r → 一个单词结束了
+    if (!isLetter(ch) &amp;&amp; (last === "s" || last === "r")) {
+      words++;
+    }
+    last = ch;                    // 记住当前字符
+  }
+
+  // 字符串以 r 或 s 结尾，最后一个单词也要算上
+  if (last === "r" || last === "s") words++;
+
+  return words;
+}
+</pre></div>
+</div>
+
+<p>假设一位不太懂规格测试的开发者只写了两个测试：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/CountWordsTest.java"><pre>
+@Test
+void twoWordsEndingWithS() {
+  int words = new CountWords().count("dogs cats");
+  assertThat(words).isEqualTo(2);
+}
+
+@Test
+void noWordsAtAll() {
+  int words = new CountWords().count("dog cat");
+  assertThat(words).isEqualTo(0);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_count_words.py"><pre>
+from count_words import count_words
+
+def test_two_words_ending_with_s():
+    assert count_words("dogs cats") == 2
+
+def test_no_words_at_all():
+    assert count_words("dog cat") == 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="countWords.test.ts"><pre>
+import { test, expect } from "vitest";
+import { countWords } from "./countWords";
+
+test("two words ending with s", () =&gt; {
+  expect(countWords("dogs cats")).toBe(2);
+});
+
+test("no words at all", () =&gt; {
+  expect(countWords("dog cat")).toBe(0);
+});
+</pre></div>
+</div>
+
+<p>显然不完整 —— 连以 "r" 结尾的单词都没测。跑一下覆盖率工具，报告长这样：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="覆盖率报告示意：两个 if 行部分覆盖（黄色），其他行全覆盖（绿色）">
+  <rect class="bx" x="20" y="14" width="720" height="262" rx="10"/>
+  <text class="sm" x="36" y="36">CountWords.java — 覆盖率报告（示意，模仿 JaCoCo）</text>
+
+  <rect x="60" y="48" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="63" text-anchor="end">3</text><text class="mono" x="90" y="63">int words = 0;</text>
+  <rect x="60" y="72" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="87" text-anchor="end">4</text><text class="mono" x="90" y="87">char last = ' ';</text>
+  <rect x="60" y="96" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="111" text-anchor="end">6</text><text class="mono" x="90" y="111">for (int i = 0; i &lt; str.length(); i++) {</text>
+  <polygon points="72,101 78,107 72,113 66,107" style="fill:var(--green)"/>
+  <rect x="60" y="120" width="660" height="22" style="fill:var(--accent-bg)"/>
+  <text class="sm" x="44" y="135" text-anchor="end">7</text><text class="mono" x="100" y="135">if (!isLetter(str.charAt(i)) &amp;&amp; (last == 's' || last == 'r'))</text>
+  <polygon points="72,125 78,131 72,137 66,131" style="fill:var(--accent)"/>
+  <rect x="60" y="144" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="159" text-anchor="end">8</text><text class="mono" x="110" y="159">words++;</text>
+  <rect x="60" y="168" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="183" text-anchor="end">10</text><text class="mono" x="100" y="183">last = str.charAt(i);</text>
+  <rect x="60" y="192" width="660" height="22" style="fill:var(--accent-bg)"/>
+  <text class="sm" x="44" y="207" text-anchor="end">12</text><text class="mono" x="90" y="207">if (last == 'r' || last == 's')</text>
+  <polygon points="72,197 78,203 72,209 66,203" style="fill:var(--accent)"/>
+  <rect x="60" y="216" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="231" text-anchor="end">13</text><text class="mono" x="100" y="231">words++;</text>
+  <rect x="60" y="240" width="660" height="22" style="fill:var(--green-bg)"/>
+  <text class="sm" x="44" y="255" text-anchor="end">14</text><text class="mono" x="90" y="255">return words;</text>
+
+  <rect x="40" y="290" width="16" height="16" style="fill:var(--green-bg);stroke:var(--green)"/>
+  <text class="sm" x="62" y="303">绿色：完全覆盖</text>
+  <rect x="170" y="290" width="16" height="16" style="fill:var(--accent-bg);stroke:var(--accent)"/>
+  <text class="sm" x="192" y="303">黄色：部分覆盖（有分支没走到）</text>
+  <rect x="390" y="290" width="16" height="16" style="fill:var(--red-bg);stroke:var(--red)"/>
+  <text class="sm" x="412" y="303">红色：完全没覆盖</text>
+  <polygon points="560,292 566,298 560,304 554,298" style="fill:var(--accent)"/>
+  <text class="sm" x="574" y="303">菱形：这一行有分支</text>
+</svg>
+<figcaption>图 3-1　两个测试的覆盖率：所有行都执行到了，但两个 if 只是「部分覆盖」</figcaption>
+</figure>
+
+<p>
+  背景色说明每一行的覆盖情况；菱形标记可能产生分支的语句（if、for、while、三元表达式、lambda 等）。
+  没有颜色的行（比如 <code>}</code>）是工具看不见的 —— 覆盖率工具其实是在编译后的字节码里插桩计数，括号和方法声明并不算数。
+</p>
+
+<p>
+  把鼠标悬停在第一个 if 的菱形上，JaCoCo 会说：<strong>6 种情况（3 个条件 × 真/假）中有 1 种没覆盖</strong>。
+  具体是 <code>last == 'r'</code> 从来没为真过。这条信息很有用：结构化测试让我们发现了规格测试漏掉的东西。
+</p>
+
+<div class="box note">
+  <div class="t">&#9432; 为什么会漏掉一个用例？</div>
+  <ul>
+    <li><strong>开发者（测试者）犯错了。</strong>规格写得很清楚，只是没想到。</li>
+    <li><strong>规格没提到，也不清楚这个行为是否符合预期。</strong>要决定是否去问需求方 —— 这是实现上的错误吗？</li>
+    <li><strong>规格没提到，但代码有理由存在。</strong>比如性能、持久化等实现细节，功能需求里不会写。应该补一个测试，因为这些实现细节同样可能出 Bug。</li>
+  </ul>
+</div>
+
+<p>补上「以 r 结尾」的测试，再跑一次覆盖率，所有行变成绿色：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/CountWordsTest.java"><pre>
+@Test
+void wordsThatEndInR() {
+  int words = new CountWords().count("car bar");
+  assertThat(words).isEqualTo(2);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_count_words.py"><pre>
+def test_words_that_end_in_r():
+    assert count_words("car bar") == 2
+</pre></div>
+<div class="code" data-lang="ts" data-file="countWords.test.ts"><pre>
+test("words that end in r", () =&gt; {
+  expect(countWords("car bar")).toBe(2);
+});
+</pre></div>
+</div>
+
+<h3>各语言怎么跑覆盖率</h3>
+
+<div class="langs">
+<div class="code" data-lang="bash" data-file="Java：JaCoCo（本仓库 ch3 已配置）"><pre>
+cd ch3
+mvn clean test jacoco:report
+# 打开 target/site/jacoco/index.html 查看报告
+# 或者直接运行仓库里的脚本：./coverage.sh
+</pre></div>
+<div class="code" data-lang="bash" data-file="Python：coverage.py + pytest-cov"><pre>
+pip install pytest pytest-cov
+# --cov-branch 打开分支覆盖；term-missing 在终端列出没覆盖的行号
+pytest --cov=count_words --cov-branch --cov-report=term-missing
+# 生成 HTML 报告：htmlcov/index.html
+pytest --cov=count_words --cov-branch --cov-report=html
+</pre></div>
+<div class="code" data-lang="bash" data-file="TypeScript：Vitest 内置覆盖率"><pre>
+npm i -D vitest @vitest/coverage-v8
+# v8 引擎原生统计行、分支和函数覆盖
+npx vitest run --coverage
+# HTML 报告默认在 coverage/index.html
+</pre></div>
+</div>
+
+<h2 id="nutshell">结构化测试的流程</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="结构化测试流程：先做规格测试，读实现，找出未覆盖代码，理解原因，决定是否测试，写测试，再找其他有趣情况">
+  <rect class="bx-b" x="14" y="30" width="130" height="56" rx="10"/>
+  <text class="ttl on-b" x="79" y="54" text-anchor="middle">① 规格测试</text>
+  <text class="sm" x="79" y="72" text-anchor="middle">第 2 章</text>
+  <path class="ln" d="M146 58 H172" marker-end="url(#ar)"/>
+  <rect class="bx" x="176" y="30" width="130" height="56" rx="10"/>
+  <text class="ttl" x="241" y="54" text-anchor="middle">② 读实现</text>
+  <text class="sm" x="241" y="72" text-anchor="middle">理解主要编码决策</text>
+  <path class="ln" d="M308 58 H334" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="338" y="30" width="150" height="56" rx="10"/>
+  <text class="ttl on-a" x="413" y="54" text-anchor="middle">③ 跑覆盖率</text>
+  <text class="sm" x="413" y="72" text-anchor="middle">找出没覆盖的部分</text>
+
+  <path class="ln" d="M413 88 V120" marker-end="url(#ar)"/>
+  <rect class="bx-d" x="200" y="124" width="546" height="130" rx="12"/>
+  <text class="sm" x="216" y="144">④ 对每一处没覆盖的代码</text>
+  <rect class="bx" x="216" y="156" width="150" height="56" rx="10"/>
+  <text class="ttl" x="291" y="180" text-anchor="middle">4a 理解原因</text>
+  <text class="sm" x="291" y="198" text-anchor="middle">规格测试时为什么没想到？</text>
+  <path class="ln" d="M368 184 H396" marker-end="url(#ar)"/>
+  <polygon points="470,154 540,184 470,214 400,184" class="bx-a"/>
+  <text class="ttl on-a" x="470" y="182" text-anchor="middle">4b 值得测？</text>
+  <text class="sm" x="470" y="198" text-anchor="middle">有意识的决定</text>
+  <path class="ln-g" d="M542 184 H586" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="562" y="176" text-anchor="middle">是</text>
+  <rect class="bx-g" x="590" y="156" width="140" height="56" rx="10"/>
+  <text class="ttl on-g" x="660" y="180" text-anchor="middle">4c 写测试</text>
+  <text class="sm" x="660" y="198" text-anchor="middle">覆盖缺失部分</text>
+  <text class="sm" x="470" y="238" text-anchor="middle">否：记录理由，留着不覆盖也没关系</text>
+
+  <rect class="bx-p" x="14" y="150" width="160" height="70" rx="10"/>
+  <text class="ttl on-p" x="94" y="178" text-anchor="middle">⑤ 回到代码</text>
+  <text class="sm" x="94" y="198" text-anchor="middle">找其他有趣的用例</text>
+  <path class="ln-d" d="M200 185 H178" marker-end="url(#ar)"/>
+  <path class="ln-d" d="M94 148 V108 H241 V90" marker-end="url(#ar)"/>
+</svg>
+<figcaption>图 3-2　结构化测试的流程。关键在于 4b：测不测一段代码，现在是你<strong>有意识</strong>做出的决定</figcaption>
+</figure>
+
+<p>最重要的一点：<strong>结构化测试是对规格测试的补充</strong>。覆盖率工具只是一个自动找出「哪里没测到」的手段。和上一章一样，这个流程是迭代的，回头去规格里再挖几个用例是常有的事。</p>
+
+<h2 id="criteria">覆盖准则：要测得多彻底？</h2>
+
+<p>发现一行没覆盖时，要决定覆盖得多彻底。还是那行 if：</p>
+
+<div class="code" data-lang="java"><pre>
+if (!Character.isLetter(str.charAt(i)) &amp;&amp; (last == 's' || last == 'r'))
+</pre></div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="同一个 if，四种覆盖准则需要的测试数：行 1 个、分支 2 个、条件+分支 6 个、路径 8 个">
+  <rect class="bx" x="20" y="186" width="160" height="50" rx="8"/>
+  <text class="ttl" x="100" y="208" text-anchor="middle">行覆盖</text>
+  <text class="sm" x="100" y="226" text-anchor="middle">执行到这一行就行</text>
+  <rect class="bx-b" x="205" y="136" width="160" height="100" rx="8"/>
+  <text class="ttl on-b" x="285" y="158" text-anchor="middle">分支覆盖</text>
+  <text class="sm" x="285" y="176" text-anchor="middle">整个 if 为真、为假</text>
+  <text class="sm" x="285" y="192" text-anchor="middle">各一次</text>
+  <rect class="bx-g" x="390" y="86" width="160" height="150" rx="8"/>
+  <text class="ttl on-g" x="470" y="108" text-anchor="middle">条件 + 分支覆盖</text>
+  <text class="sm" x="470" y="126" text-anchor="middle">每个条件真假各一次，</text>
+  <text class="sm" x="470" y="142" text-anchor="middle">整体也真假各一次</text>
+  <rect class="bx-p" x="575" y="36" width="160" height="200" rx="8"/>
+  <text class="ttl on-p" x="655" y="58" text-anchor="middle">路径覆盖</text>
+  <text class="sm" x="655" y="76" text-anchor="middle">所有组合都走一遍</text>
+  <text class="ttl" x="100" y="176" text-anchor="middle" style="font-size:22px">1</text>
+  <text class="ttl on-b" x="285" y="126" text-anchor="middle" style="font-size:22px">2</text>
+  <text class="ttl on-g" x="470" y="76" text-anchor="middle" style="font-size:22px">6</text>
+  <text class="ttl on-p" x="655" y="26" text-anchor="middle" style="font-size:22px">2³ = 8</text>
+  <text class="sm" x="20" y="24">最少需要的测试数 ↑</text>
+  <text class="sm" x="470" y="200" text-anchor="middle">3 个条件 × 真/假</text>
+  <text class="sm" x="470" y="216" text-anchor="middle">= 6 个要覆盖的情况</text>
+</svg>
+<figcaption>图 3-3　同一行代码，越严格的准则需要越多的测试</figcaption>
+</figure>
+
+<h3>行覆盖（line coverage）</h3>
+<p>只要有一个测试执行到这一行，就算覆盖。哪怕它是一个塞满条件的复杂 if。</p>
+
+<h3>分支覆盖（branch coverage）</h3>
+<p>
+  if、for、while 这类分支语句会让程序走向不同的路。对 <code>if (a &amp;&amp; b)</code>，有一个测试让它为真、一个让它为假，就算分支覆盖。
+  用<strong>控制流图（CFG）</strong>来看：每个判断节点引出「真」和「假」两条边，<strong>覆盖图里所有的边 = 100% 分支覆盖</strong>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 420" role="img" aria-label="CountWords 的控制流图">
+  <rect class="bx" x="250" y="10" width="200" height="42" rx="6"/>
+  <text class="mono" x="350" y="27" text-anchor="middle">int words = 0;</text>
+  <text class="mono" x="350" y="44" text-anchor="middle">char last = ' ';</text>
+  <path class="ln" d="M350 54 V66" marker-end="url(#ar)"/>
+  <rect class="bx" x="290" y="70" width="120" height="28" rx="6"/>
+  <text class="mono" x="350" y="89" text-anchor="middle">int i = 0;</text>
+  <path class="ln" d="M350 100 V110" marker-end="url(#ar)"/>
+  <polygon points="350,114 450,140 350,166 250,140" class="bx-b"/>
+  <text class="mono on-b" x="350" y="145" text-anchor="middle">i &lt; str.length()</text>
+
+  <path class="ln-g" d="M350 168 V192" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="358" y="186">true</text>
+  <polygon points="350,196 510,230 350,264 190,230" class="bx-b"/>
+  <text class="mono on-b" x="350" y="225" text-anchor="middle">!isLetter(c) &amp;&amp;</text>
+  <text class="mono on-b" x="350" y="243" text-anchor="middle">(last=='s' || last=='r')</text>
+
+  <path class="ln-g" d="M190 230 H154" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="160" y="222">true</text>
+  <rect class="bx" x="44" y="214" width="106" height="32" rx="6"/>
+  <text class="mono" x="97" y="235" text-anchor="middle">words++;</text>
+  <path class="ln" d="M97 248 V310 H236" marker-end="url(#ar)"/>
+
+  <path class="ln-r" d="M350 266 V290" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="358" y="284">false</text>
+  <rect class="bx" x="240" y="294" width="220" height="32" rx="6"/>
+  <text class="mono" x="350" y="315" text-anchor="middle">last = str.charAt(i);</text>
+  <path class="ln" d="M350 328 V340" marker-end="url(#ar)"/>
+  <rect class="bx" x="310" y="344" width="80" height="28" rx="6"/>
+  <text class="mono" x="350" y="363" text-anchor="middle">i++</text>
+  <path class="ln" d="M310 358 H20 V140 H246" marker-end="url(#ar)"/>
+
+  <path class="ln-r" d="M450 140 H536" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="462" y="132">false</text>
+  <polygon points="640,112 740,140 640,168 540,140" class="bx-p"/>
+  <text class="mono on-p" x="640" y="137" text-anchor="middle">last=='r' ||</text>
+  <text class="mono on-p" x="640" y="152" text-anchor="middle">last=='s'</text>
+  <path class="ln-g" d="M640 170 V202" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="648" y="194">true</text>
+  <rect class="bx" x="590" y="206" width="100" height="30" rx="6"/>
+  <text class="mono" x="640" y="226" text-anchor="middle">words++;</text>
+  <path class="ln" d="M640 238 V286" marker-end="url(#ar)"/>
+  <path class="ln-r" d="M740 140 H750 V306 H706" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="708" y="298">false</text>
+  <rect class="bx-g" x="580" y="290" width="122" height="32" rx="6"/>
+  <text class="mono on-g" x="641" y="311" text-anchor="middle">return words;</text>
+
+  <text class="sm" x="470" y="360">矩形：代码块　菱形：判断　箭头：执行流</text>
+  <text class="sm" x="470" y="380">3 个判断节点 × 真/假 = 6 条出边</text>
+  <text class="sm" x="470" y="400">全部走过一遍 = 100% 分支覆盖</text>
+</svg>
+<figcaption>图 3-4　CountWords 的控制流图（简化）。两个 if、一个 for，共三个判断节点、六条出边</figcaption>
+</figure>
+
+<h3>条件 + 分支覆盖（condition + branch coverage）</h3>
+<p>
+  不仅看分支，还看<strong>每个分支语句里的每个条件</strong>。第一个 if 有三个条件：<code>!isLetter(...)</code>、<code>last == 's'</code>、<code>last == 'r'</code>。
+  目标是让每个条件各为真、为假至少一次，<em>并且</em>整个判断也为真、为假至少一次。
+</p>
+
+<div class="box warn">
+  <div class="t">&#9888; 为什么不能只看条件？</div>
+  <p>
+    看 <code>if (A || B)</code>：T1 = (A 真, B 假)，T2 = (A 假, B 真)。两个条件都真假各一次 ——「条件覆盖」达成了。
+    但两次整个 if 都是<strong>真</strong>，else 分支根本没走过！所以我们总是把条件覆盖和分支覆盖<strong>一起</strong>用。
+  </p>
+</div>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="只满足条件覆盖时，if(A||B) 的 false 分支可能从未执行">
+  <polygon points="200,20 300,55 200,90 100,55" class="bx-b"/>
+  <text class="mono on-b" x="200" y="60" text-anchor="middle">A || B</text>
+  <path class="ln-g" d="M200 92 V122" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="210" y="112">true ✔ T1、T2 都走这里</text>
+  <rect class="bx-g" x="150" y="126" width="100" height="30" rx="6"/><text class="lbl on-g" x="200" y="146" text-anchor="middle">do A</text>
+  <path class="ln-r" d="M300 55 H380" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="310" y="47">false ✘ 没人走</text>
+  <rect class="bx-r" x="384" y="40" width="100" height="30" rx="6"/><text class="lbl on-r" x="434" y="60" text-anchor="middle">do B</text>
+  <text class="lbl" x="520" y="46">T1：A=真，B=假</text>
+  <text class="lbl" x="520" y="68">T2：A=假，B=真</text>
+  <text class="sm" x="520" y="96">每个条件都真假各一次，</text>
+  <text class="sm" x="520" y="112">但整个判断从没为假</text>
+</svg>
+<figcaption>图 3-5　条件覆盖 ≠ 分支覆盖</figcaption>
+</figure>
+
+<p>把复合条件拆开，每个判断节点只放一个条件，得到「扩展控制流图」。<strong>覆盖扩展图里所有的边 = 100% 条件 + 分支覆盖</strong>：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="扩展控制流图：复合条件拆成三个单条件判断节点">
+  <text class="sm" x="20" y="20">第一个 if 拆成三个单条件节点（Java 的 &amp;&amp; 和 || 会短路）</text>
+  <polygon points="110,44 200,72 110,100 20,72" class="bx-b"/>
+  <text class="mono on-b" x="110" y="77" text-anchor="middle">!isLetter(c)</text>
+  <path class="ln-g" d="M200 72 H256" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="212" y="64">true</text>
+  <polygon points="340,44 420,72 340,100 260,72" class="bx-b"/>
+  <text class="mono on-b" x="340" y="77" text-anchor="middle">last=='s'</text>
+  <path class="ln-g" d="M420 72 H596" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="440" y="64">true</text>
+  <path class="ln-r" d="M340 102 V122" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="348" y="116">false</text>
+  <polygon points="340,126 420,154 340,182 260,154" class="bx-b"/>
+  <text class="mono on-b" x="340" y="159" text-anchor="middle">last=='r'</text>
+  <path class="ln-g" d="M420 154 H630 V92" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="440" y="146">true</text>
+  <rect class="bx-g" x="600" y="56" width="120" height="32" rx="6"/>
+  <text class="mono on-g" x="660" y="77" text-anchor="middle">words++;</text>
+  <path class="ln" d="M700 90 V206" marker-end="url(#ar)"/>
+
+  <path class="ln-r" d="M110 102 V206" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="118" y="150">false</text>
+  <path class="ln-r" d="M340 184 V206" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="348" y="200">false</text>
+  <rect class="bx" x="60" y="210" width="680" height="30" rx="6"/>
+  <text class="mono" x="400" y="230" text-anchor="middle">last = str.charAt(i);</text>
+</svg>
+<figcaption>图 3-6　扩展控制流图（第一个 if 部分）。三个条件各有两条出边，共 6 条</figcaption>
+</figure>
+
+<h3>路径覆盖（path coverage）</h3>
+<p>
+  覆盖程序<strong>所有可能的执行路径</strong>。理论上最强，实际上往往做不到或太贵：3 个独立条件就有 2³ = 8 条路径，10 个条件就是 2¹⁰ = 1024 条。
+  有循环时更麻烦 —— 无界循环可能跑几百次，严格的路径覆盖要求把循环跑 1 次、2 次、3 次……都测一遍。
+</p>
+
+<h2 id="mcdc">复杂条件与 MC/DC</h2>
+
+<p>
+  碰到又长又复杂的 if，怎么在「测得彻底」和「用例不爆炸」之间取舍？答案是<strong>修正条件/判定覆盖（MC/DC，Modified Condition/Decision Coverage）</strong>。
+  它像路径覆盖一样看条件组合，但只挑<strong>重要的</strong>组合：确保<strong>每个条件都能独立地影响整个判断的结果</strong>。
+</p>
+
+<h3>抽象例子：A &amp;&amp; (B || C)</h3>
+<p>对条件 A，MC/DC 要求：</p>
+<ul>
+  <li>有一个测试 A = 真（记为 T1），一个测试 A = 假（记为 T2）；</li>
+  <li>T1 和 T2 的整体结果<strong>不同</strong>；</li>
+  <li>T1 和 T2 中，B 和 C 的取值<strong>完全相同</strong>。</li>
+</ul>
+<p>这样的 T1、T2 叫做 A 的<strong>独立性对（independence pair）</strong>：只变 A，结果就变了，说明 A 独立地影响了结果。对 B 和 C 同理。</p>
+
+<div class="box key">
+  <div class="t">&#128273; N + 1 规则</div>
+  <p>如果每个条件都只有真/假两种结果，达到 100% MC/DC 通常只需要 <strong>N + 1</strong> 个测试（N 为条件个数），远少于路径覆盖的 2<sup>N</sup>。</p>
+</div>
+
+<h3>一步步推导 MC/DC 测试集</h3>
+
+<p>回到 CountWords 的 if：<code>isLetter</code>（取反后参与判断）、<code>last == s</code>、<code>last == r</code>，结构就是 <code>A &amp;&amp; (B || C)</code>。先列真值表（这里 isLetter 一列表示 <code>!isLetter</code> 的值，即「当前是非字母」）：</p>
+
+<div class="tw">
+<table class="tt">
+  <tr><th>用例</th><th>非字母</th><th>last == s</th><th>last == r</th><th>判断结果</th></tr>
+  <tr><td>T1</td><td class="T">T</td><td class="T">T</td><td class="T">T</td><td class="T">T</td></tr>
+  <tr class="pick"><td>T2</td><td class="T">T</td><td class="T">T</td><td class="F">F</td><td class="T">T</td></tr>
+  <tr class="pick"><td>T3</td><td class="T">T</td><td class="F">F</td><td class="T">T</td><td class="T">T</td></tr>
+  <tr class="pick"><td>T4</td><td class="T">T</td><td class="F">F</td><td class="F">F</td><td class="F">F</td></tr>
+  <tr><td>T5</td><td class="F">F</td><td class="T">T</td><td class="T">T</td><td class="F">F</td></tr>
+  <tr class="pick"><td>T6</td><td class="F">F</td><td class="T">T</td><td class="F">F</td><td class="F">F</td></tr>
+  <tr><td>T7</td><td class="F">F</td><td class="F">F</td><td class="T">T</td><td class="F">F</td></tr>
+  <tr><td>T8</td><td class="F">F</td><td class="F">F</td><td class="F">F</td><td class="F">F</td></tr>
+</table>
+</div>
+
+<p>然后<strong>逐个条件找独立性对</strong>：找两行，只有这个条件不同、其余条件相同，而且结果不同。</p>
+
+<ol class="steps">
+  <li><strong>非字母：</strong>T1 和 T5 只差这一列，结果 T→F，✔ 是一对。同理 {T2, T6}、{T3, T7} 也是。{T4, T8} 结果都是 F，✘ 不算。</li>
+  <li><strong>last == s：</strong>T1 和 T3 只差这一列，但结果都是 T，✘。找遍全表，只有 <strong>{T2, T4}</strong> 成立。</li>
+  <li><strong>last == r：</strong>同样只有 <strong>{T3, T4}</strong> 成立。</li>
+  <li><strong>挑最少的组合：</strong>后两个条件没得选，必须要 T2、T3、T4。第一个条件从 {T1,T5}、{T2,T6}、{T3,T7} 里挑一对 —— 选 {T2,T6} 或 {T3,T7} 只需再加一个测试（另一半已经在集合里了）。</li>
+</ol>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 190" role="img" aria-label="独立性对与最终选出的 MC/DC 测试集 T2 T3 T4 T6">
+  <text class="ttl" x="20" y="24">每个条件的独立性对</text>
+  <rect class="bx-b" x="20" y="40" width="230" height="64" rx="8"/>
+  <text class="ttl on-b" x="36" y="62">非字母</text>
+  <text class="mono" x="36" y="88">{T1,T5} {T2,T6} {T3,T7}</text>
+  <rect class="bx-g" x="265" y="40" width="160" height="64" rx="8"/>
+  <text class="ttl on-g" x="281" y="62">last == s</text>
+  <text class="mono" x="281" y="88">{T2,T4}</text>
+  <rect class="bx-p" x="440" y="40" width="160" height="64" rx="8"/>
+  <text class="ttl on-p" x="456" y="62">last == r</text>
+  <text class="mono" x="456" y="88">{T3,T4}</text>
+
+  <path class="ln-a" d="M380 110 V134" marker-end="url(#ar-a)"/>
+  <rect class="bx-a" x="160" y="138" width="440" height="42" rx="10"/>
+  <text class="ttl on-a" x="380" y="165" text-anchor="middle">MC/DC 测试集：{T2, T3, T4, T6} —— 4 = N + 1 个</text>
+  <text class="sm" x="620" y="156">路径覆盖要 8 个</text>
+  <text class="sm" x="620" y="172">（答案不唯一，</text>
+  <text class="sm" x="620" y="188">选 T7 替 T6 也行）</text>
+</svg>
+<figcaption>图 3-7　从独立性对中挑出最小集合</figcaption>
+</figure>
+
+<p>最后把这 4 个抽象用例落到具体输入上。T2：非字母、last 是 s → 比如 <code>"cats "</code> 读到空格时；T3：非字母、last 是 r；T4：非字母、last 既非 s 也非 r；T6：是字母、last 是 s。</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 亲手做一遍</div>
+  <p>强烈建议你自己把整个过程在纸上走一遍，感受「只动一个条件、看结果变不变」的节奏。作者在 YouTube 上也有一个可视化讲解 MC/DC 的视频。</p>
+</div>
+
+<h2 id="loops">循环怎么测</h2>
+
+<p>循环体可能执行任意多次。<code>while(true)</code> 可能永不结束；带 break 的 <code>for (i = 0; i &lt; 10; i++)</code> 可能执行 0 到 10 次。穷举不现实，所以用<strong>循环边界充分性准则（loop boundary adequacy criterion）</strong>：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 140" role="img" aria-label="循环边界准则：执行 0 次、1 次、多次">
+  <rect class="bx-b" x="40" y="30" width="200" height="80" rx="12"/>
+  <text class="ttl on-b" x="140" y="62" text-anchor="middle">0 次</text>
+  <text class="sm" x="140" y="86" text-anchor="middle">循环体一次都不执行</text>
+  <rect class="bx-g" x="280" y="30" width="200" height="80" rx="12"/>
+  <text class="ttl on-g" x="380" y="62" text-anchor="middle">1 次</text>
+  <text class="sm" x="380" y="86" text-anchor="middle">恰好执行一次</text>
+  <rect class="bx-p" x="520" y="30" width="200" height="80" rx="12"/>
+  <text class="ttl on-p" x="620" y="62" text-anchor="middle">多次</text>
+  <text class="sm" x="620" y="86" text-anchor="middle">2 次？5 次？10 次？看需求</text>
+</svg>
+<figcaption>图 3-8　每个循环至少三个测试</figcaption>
+</figure>
+
+<p>实践中最难的是「多次」：该让它跑 2 次、5 次还是 10 次？这需要你真正理解程序和需求。别怕为「多次」写两个甚至更多测试 —— 做你需要做的，确保循环按预期工作。</p>
+
+<h2 id="subsumption">准则之间的包含关系</h2>
+
+<p>准则 X <strong>包含（subsume）</strong>准则 Y，意思是：Y 覆盖到的一切，X 也都覆盖到。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="覆盖准则的包含关系：路径覆盖最强，行覆盖最弱，基本条件覆盖不包含行覆盖">
+  <rect class="bx-p" x="290" y="14" width="180" height="44" rx="10"/>
+  <text class="ttl on-p" x="380" y="41" text-anchor="middle">路径覆盖</text>
+  <path class="ln" d="M380 60 V84" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="290" y="88" width="180" height="44" rx="10"/>
+  <text class="ttl on-a" x="380" y="115" text-anchor="middle">MC/DC</text>
+  <path class="ln" d="M380 134 V158" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="270" y="162" width="220" height="44" rx="10"/>
+  <text class="ttl on-g" x="380" y="189" text-anchor="middle">条件 + 分支覆盖</text>
+  <path class="ln" d="M330 208 L250 236" marker-end="url(#ar)"/>
+  <path class="ln" d="M430 208 L510 236" marker-end="url(#ar)"/>
+  <rect class="bx-b" x="150" y="240" width="180" height="40" rx="10"/>
+  <text class="ttl on-b" x="240" y="265" text-anchor="middle">分支覆盖</text>
+  <rect class="bx" x="430" y="240" width="180" height="40" rx="10"/>
+  <text class="ttl" x="520" y="265" text-anchor="middle">（基本）条件覆盖</text>
+  <path class="ln" d="M240 282 V294" marker-end="url(#ar)"/>
+  <rect class="bx" x="150" y="296" width="180" height="30" rx="8"/>
+  <text class="lbl" x="240" y="316" text-anchor="middle">行 / 语句覆盖</text>
+  <path class="ln-r" d="M430 270 L336 306" style="stroke-dasharray:5 4"/>
+  <text class="sm on-r" x="400" y="316">✘ 不包含行覆盖</text>
+
+  <text class="sm" x="500" y="40">最强：包含其他所有准则</text>
+  <text class="sm" x="500" y="114">保证每个条件的独立影响</text>
+  <text class="sm" x="30" y="316">最弱 →</text>
+  <text class="sm" x="30" y="40">箭头 X → Y：</text>
+  <text class="sm" x="30" y="58">达到 X 就一定达到 Y</text>
+</svg>
+<figcaption>图 3-9　覆盖准则的包含关系。越往上越严格，也越贵</figcaption>
+</figure>
+
+<ul>
+  <li>100% 分支覆盖一定意味着 100% 行覆盖；反之不成立。</li>
+  <li>条件 + 分支覆盖同时包含分支覆盖和（基本）条件覆盖。</li>
+  <li>MC/DC 比条件 + 分支覆盖更强，因为它保证每个条件的<em>独立</em>影响。</li>
+  <li>路径覆盖包含所有其他准则 —— 它本来就走遍了所有路径。</li>
+  <li>注意：<strong>基本条件覆盖不一定包含行覆盖</strong>，原因见图 3-5：else 分支里的行可能一次都没执行。</li>
+</ul>
+
+<p>弱的准则便宜但可能漏掉很多，强的准则彻底但成本高。选哪个，由你决定。</p>
+
+<h2 id="leftpad">实战：规格测试 + 结构化测试一起用</h2>
+
+<p>来看 Apache Commons Lang 里真实的 <code>leftPad()</code>：</p>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：leftPad(str, size, padStr)</div>
+  <p>用 padStr 在 str 左边填充，直到长度达到 size。</p>
+  <ul>
+    <li><code>str</code> —— 要填充的字符串，可以为 null。</li>
+    <li><code>size</code> —— 目标长度。</li>
+    <li><code>padStr</code> —— 用来填充的字符串。null 或空视为一个空格。</li>
+  </ul>
+  <p>返回左填充后的字符串；如果不需要填充，返回原字符串；str 为 null 则返回 null。<br>
+  例：<code>leftPad("abc", 5, "-")</code> → <code>"--abc"</code>。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/LeftPadUtils.java"><pre>
+public static String leftPad(final String str, final int size, String padStr) {
+  if (str == null) {
+    return null;
+  }
+  if (isEmpty(padStr)) {
+    padStr = SPACE;                   // null 或空 → 一个空格
+  }
+  final int padLen = padStr.length();
+  final int strLen = str.length();
+  final int pads = size - strLen;     // 需要填充几个字符
+  if (pads &lt;= 0) {
+    return str;                       // 不需要填充时返回原字符串
+  }
+
+  if (pads == padLen) {
+    return padStr.concat(str);        // 恰好填一整个 padStr
+  } else if (pads &lt; padLen) {
+    return padStr.substring(0, pads).concat(str);   // 只用 padStr 的前一部分
+  } else {
+    // 需要重复 padStr 多次，一个字符一个字符地填
+    final char[] padding = new char[pads];
+    final char[] padChars = padStr.toCharArray();
+    for (int i = 0; i &lt; pads; i++) {
+      padding[i] = padChars[i % padLen];
+    }
+    return new String(padding).concat(str);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="left_pad.py"><pre>
+def left_pad(s: str | None, size: int, pad_str: str | None) -&gt; str | None:
+    if s is None:
+        return None
+    if not pad_str:
+        pad_str = " "                    # None 或空 → 一个空格
+    pad_len = len(pad_str)
+    pads = size - len(s)                 # 需要填充几个字符
+    if pads &lt;= 0:
+        return s                         # 不需要填充时返回原字符串
+
+    if pads == pad_len:
+        return pad_str + s               # 恰好填一整个 pad_str
+    elif pads &lt; pad_len:
+        return pad_str[:pads] + s        # 只用 pad_str 的前一部分
+    else:
+        # 需要重复 pad_str 多次，一个字符一个字符地填
+        padding = "".join(pad_str[i % pad_len] for i in range(pads))
+        return padding + s
+</pre></div>
+<div class="code" data-lang="ts" data-file="leftPad.ts"><pre>
+export function leftPad(str: string | null, size: number, padStr: string | null): string | null {
+  if (str == null) {
+    return null;
+  }
+  if (!padStr) {
+    padStr = " ";                        // null 或空 → 一个空格
+  }
+  const padLen = padStr.length;
+  const pads = size - str.length;        // 需要填充几个字符
+  if (pads &lt;= 0) {
+    return str;                          // 不需要填充时返回原字符串
+  }
+
+  if (pads === padLen) {
+    return padStr + str;                 // 恰好填一整个 padStr
+  } else if (pads &lt; padLen) {
+    return padStr.substring(0, pads) + str;   // 只用 padStr 的前一部分
+  } else {
+    // 需要重复 padStr 多次，一个字符一个字符地填
+    let padding = "";
+    for (let i = 0; i &lt; pads; i++) {
+      padding += padStr[i % padLen];
+    }
+    return padding + str;
+  }
+}
+</pre></div>
+</div>
+
+<h3>第一轮：规格测试</h3>
+
+<div class="cards">
+  <div class="card"><h4>str</h4><p>null · 空字符串 · 非空</p></div>
+  <div class="card"><h4>size</h4><p>负数 · 正数</p></div>
+  <div class="card"><h4>padStr</h4><p>null · 空 · 非空</p></div>
+  <div class="card"><h4>(str, size)</h4><p>size &lt; len(str) · size &gt; len(str)</p></div>
+  <div class="card"><h4>边界</h4><p>size 恰好为 0 · str 长度为 1 · padStr 长度为 1 · size 恰好等于 len(str)</p></div>
+</div>
+
+<p>异常情况各测一次；padStr 的「单字符」边界只测一次，其他用例也都用单字符填充（否则组合太多）。得到 9 个用例：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/LeftPadTest.java"><pre>
+public class LeftPadTest {
+
+  @ParameterizedTest
+  @MethodSource("generator")
+  void test(String originalStr, int size, String padString, String expectedStr) {
+    assertThat(leftPad(originalStr, size, padString)).isEqualTo(expectedStr);
+  }
+
+  static Stream&lt;Arguments&gt; generator() {
+    return Stream.of(
+      of(null, 10, "-", null),       // T1 str 为 null
+      of("", 5, "-", "-----"),       // T2 str 为空
+      of("abc", -1, "-", "abc"),     // T3 size 为负
+      of("abc", 5, null, "  abc"),   // T4 padStr 为 null
+      of("abc", 5, "", "  abc"),     // T5 padStr 为空
+      of("abc", 5, "-", "--abc"),    // T6 padStr 单字符
+      of("abc", 3, "-", "abc"),      // T7 size == len(str)
+      of("abc", 0, "-", "abc"),      // T8 size == 0
+      of("abc", 2, "-", "abc")       // T9 size &lt; len(str)
+    );
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_left_pad.py"><pre>
+import pytest
+from left_pad import left_pad
+
+@pytest.mark.parametrize("s, size, pad, expected", [
+    (None, 10, "-", None),        # T1 str 为 None
+    ("", 5, "-", "-----"),        # T2 str 为空
+    ("abc", -1, "-", "abc"),      # T3 size 为负
+    ("abc", 5, None, "  abc"),    # T4 pad 为 None
+    ("abc", 5, "", "  abc"),      # T5 pad 为空
+    ("abc", 5, "-", "--abc"),     # T6 pad 单字符
+    ("abc", 3, "-", "abc"),       # T7 size == len(str)
+    ("abc", 0, "-", "abc"),       # T8 size == 0
+    ("abc", 2, "-", "abc"),       # T9 size &lt; len(str)
+])
+def test_left_pad(s, size, pad, expected):
+    assert left_pad(s, size, pad) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="leftPad.test.ts"><pre>
+import { test, expect } from "vitest";
+import { leftPad } from "./leftPad";
+
+test.each&lt;[string | null, number, string | null, string | null]&gt;([
+  [null, 10, "-", null],          // T1 str 为 null
+  ["", 5, "-", "-----"],          // T2 str 为空
+  ["abc", -1, "-", "abc"],        // T3 size 为负
+  ["abc", 5, null, "  abc"],      // T4 padStr 为 null
+  ["abc", 5, "", "  abc"],        // T5 padStr 为空
+  ["abc", 5, "-", "--abc"],       // T6 padStr 单字符
+  ["abc", 3, "-", "abc"],         // T7 size == len(str)
+  ["abc", 0, "-", "abc"],         // T8 size == 0
+  ["abc", 2, "-", "abc"],         // T9 size &lt; len(str)
+])("leftPad(%j, %i, %j) = %j", (str, size, pad, expected) =&gt; {
+  expect(leftPad(str, size, pad)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<h3>第二轮：看覆盖率</h3>
+
+<p>
+  报告显示 <code>if (pads == padLen)</code> 和 <code>else if (pads &lt; padLen)</code> 只被部分覆盖，它们的两条 return 是红色的。为什么？
+  对照代码、规格和心智模型，我们发现：<strong>从没测过 padStr 的长度比「剩余空间」小、大或恰好相等的情况</strong>。
+  多么隐蔽的边界！这正是结构化测试的价值。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="leftPad 中 pads 与 padLen 的关系决定走哪个分支">
+  <text class="ttl" x="20" y="24">"abc" 填充到 5：pads = 2（剩余空间），然后比较 pads 和 padLen</text>
+  <path class="ln" d="M40 90 H720"/>
+  <rect class="bx-d" x="40" y="60" width="140" height="60" rx="8"/>
+  <text class="ttl" x="110" y="86" text-anchor="middle">pads ≤ 0</text>
+  <text class="sm" x="110" y="104" text-anchor="middle">直接返回 str</text>
+  <rect class="bx-g" x="200" y="60" width="160" height="60" rx="8"/>
+  <text class="ttl on-g" x="280" y="86" text-anchor="middle">pads &lt; padLen</text>
+  <text class="mono" x="280" y="106" text-anchor="middle">"---" → "--abc"</text>
+  <rect class="bx-a" x="380" y="60" width="160" height="60" rx="8"/>
+  <text class="ttl on-a" x="460" y="86" text-anchor="middle">pads == padLen</text>
+  <text class="mono" x="460" y="106" text-anchor="middle">"--" → "--abc"</text>
+  <rect class="bx-b" x="560" y="60" width="160" height="60" rx="8"/>
+  <text class="ttl on-b" x="640" y="86" text-anchor="middle">pads &gt; padLen</text>
+  <text class="mono" x="640" y="106" text-anchor="middle">"-" → "--abc"</text>
+  <text class="lbl on-g" x="280" y="146" text-anchor="middle">T11（新增）</text>
+  <text class="lbl on-a" x="460" y="146" text-anchor="middle">T10（新增）</text>
+  <text class="lbl on-b" x="640" y="146" text-anchor="middle">T12 ≈ T6</text>
+  <text class="sm" x="110" y="146" text-anchor="middle">T3、T7、T8、T9</text>
+  <text class="sm" x="380" y="182" text-anchor="middle">规格测试只用了单字符 padStr，所以永远落在最右边这一格</text>
+</svg>
+<figcaption>图 3-10　覆盖率报告指出的「漏网分区」：padStr 长度与剩余空间的三种关系</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/LeftPadTest.java（新增）"><pre>
+static Stream&lt;Arguments&gt; generator() {
+  return Stream.of(
+    // ……前面 9 个
+    of("abc", 5, "--", "--abc"),     // T10 padStr 长度 == 剩余空间
+    of("abc", 5, "---", "--abc"),    // T11 padStr 长度 &gt; 剩余空间
+    of("abc", 5, "-", "--abc")       // T12 padStr 长度 &lt; 剩余空间
+  );
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_left_pad.py（新增）"><pre>
+    # ……在参数列表中追加
+    ("abc", 5, "--", "--abc"),    # T10 pad 长度 == 剩余空间
+    ("abc", 5, "---", "--abc"),   # T11 pad 长度 &gt; 剩余空间
+    ("abc", 5, "-", "--abc"),     # T12 pad 长度 &lt; 剩余空间
+</pre></div>
+<div class="code" data-lang="ts" data-file="leftPad.test.ts（新增）"><pre>
+  // ……在参数列表中追加
+  ["abc", 5, "--", "--abc"],      // T10 padStr 长度 == 剩余空间
+  ["abc", 5, "---", "--abc"],     // T11 padStr 长度 &gt; 剩余空间
+  ["abc", 5, "-", "--abc"],       // T12 padStr 长度 &lt; 剩余空间
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 不要只看数字</div>
+  <p>
+    所有分支都覆盖了，但 JaCoCo 显示整个类只有 96%：它把 <code>public class LeftPadUtils {</code> 这一行标成了未覆盖。
+    因为 leftPad 是静态方法，没有测试会实例化这个类。了解上下文后，完全可以忽略这一行 —— 这就是为什么盯着数字没有意义。
+  </p>
+</div>
+
+<h3>第三轮：从代码里再找有趣的用例</h3>
+<p>代码里有一句注释：「returns original String when possible」（尽可能返回原字符串）。这是一个可测的承诺：<strong>不需要填充时，返回的应该是<em>同一个</em>字符串对象</strong>。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/LeftPadTest.java"><pre>
+@Test
+void sameInstance() {
+  String str = "sometext";
+  assertThat(leftPad(str, 5, "-")).isSameAs(str);   // isSameAs 比较引用，不是内容
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_left_pad.py"><pre>
+def test_same_instance():
+    s = "sometext"
+    assert left_pad(s, 5, "-") is s      # is 比较对象身份，不是内容
+</pre></div>
+<div class="code" data-lang="ts" data-file="leftPad.test.ts"><pre>
+// 注意：JS 的字符串是原始值，=== 和 toBe 比较的都是内容，
+// 没法区分「同一个对象」和「内容相同的新字符串」。
+// 这个承诺在 JS 里无法、也无需测试 —— 语言特性决定了测试的边界。
+test("returns the original string when no padding is needed", () =&gt; {
+  expect(leftPad("sometext", 5, "-")).toBe("sometext");
+});
+</pre></div>
+</div>
+
+<h2 id="boundary">边界测试与结构化测试</h2>
+<p>
+  规格测试里最难的是找边界，因为规格是用自然语言写的，很模糊。而代码<strong>必须精确</strong>，所以边界在代码里一目了然。
+  上一章的 on/off 点分析可以直接套在 if 语句上：
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>条件</th><th>on 点</th><th>off 点</th></tr>
+  <tr><td><code>pads &lt;= 0</code></td><td>0（让条件为真）</td><td>1（pads 是整数，最近的让条件为假的点）</td></tr>
+  <tr><td><code>pads == padLen</code></td><td>padLen</td><td>padLen - 1 和 padLen + 1（等式有两个 off 点）</td></tr>
+  <tr><td><code>pads &lt; padLen</code></td><td>padLen（让条件为假）</td><td>padLen - 1</td></tr>
+</table>
+</div>
+<p>如果循环条件比较复杂，也可以对它做 on/off 分析。</p>
+
+<h2 id="not-enough">只做结构化测试是不够的</h2>
+
+<p>既然代码是一切的真相，为什么不只做结构化测试？看一个「数团块」的例子（改编自 CodingBat）：</p>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：countClumps(nums)</div>
+  <p>统计数组中「团块」的个数。团块是长度至少为 2 的、由相同元素组成的连续序列。数组必须非 null 且长度 &gt; 0，违反前置条件时返回 0。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/Clumps.java"><pre>
+public static int countClumps(int[] nums) {
+  if (nums == null || nums.length == 0) {
+    return 0;
+  }
+  int count = 0;
+  int prev = nums[0];
+  boolean inClump = false;
+  for (int i = 1; i &lt; nums.length; i++) {
+    if (nums[i] == prev &amp;&amp; !inClump) {   // 和前一个相同 → 发现一个团块
+      inClump = true;
+      count += 1;
+    }
+    if (nums[i] != prev) {               // 和前一个不同 → 离开团块
+      prev = nums[i];
+      inClump = false;
+    }
+  }
+  return count;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="clumps.py"><pre>
+def count_clumps(nums: list[int] | None) -&gt; int:
+    if not nums:                          # None 或空
+        return 0
+    count = 0
+    prev = nums[0]
+    in_clump = False
+    for n in nums[1:]:
+        if n == prev and not in_clump:    # 和前一个相同 → 发现一个团块
+            in_clump = True
+            count += 1
+        if n != prev:                     # 和前一个不同 → 离开团块
+            prev = n
+            in_clump = False
+    return count
+</pre></div>
+<div class="code" data-lang="ts" data-file="clumps.ts"><pre>
+export function countClumps(nums: number[] | null): number {
+  if (nums == null || nums.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  let prev = nums[0];
+  let inClump = false;
+  for (let i = 1; i &lt; nums.length; i++) {
+    if (nums[i] === prev &amp;&amp; !inClump) {  // 和前一个相同 → 发现一个团块
+      inClump = true;
+      count += 1;
+    }
+    if (nums[i] !== prev) {               // 和前一个不同 → 离开团块
+      prev = nums[i];
+      inClump = false;
+    }
+  }
+  return count;
+}
+</pre></div>
+</div>
+
+<p>不看需求，只追求 100% 分支覆盖，3 个测试就够了；再加一个「循环只跑一次」的边界测试：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch3/ClumpsOnlyStructuralTest.java"><pre>
+@ParameterizedTest
+@MethodSource("generator")
+void testClumps(int[] nums, int expectedNoOfClumps) {
+  assertThat(Clumps.countClumps(nums)).isEqualTo(expectedNoOfClumps);
+}
+
+static Stream&lt;Arguments&gt; generator() {
+  return Stream.of(
+    of(new int[]{}, 0),              // 空数组
+    of(null, 0),                     // null
+    of(new int[]{1,2,2,2,1}, 1),     // 中间有一个团块
+    of(new int[]{1}, 0)              // 只有一个元素
+  );
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_clumps_only_structural.py"><pre>
+@pytest.mark.parametrize("nums, expected", [
+    ([], 0),                 # 空列表
+    (None, 0),               # None
+    ([1, 2, 2, 2, 1], 1),    # 中间有一个团块
+    ([1], 0),                # 只有一个元素
+])
+def test_clumps(nums, expected):
+    assert count_clumps(nums) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="clumps.onlyStructural.test.ts"><pre>
+test.each&lt;[number[] | null, number]&gt;([
+  [[], 0],                   // 空数组
+  [null, 0],                 // null
+  [[1, 2, 2, 2, 1], 1],      // 中间有一个团块
+  [[1], 0],                  // 只有一个元素
+])("countClumps(%j) = %i", (nums, expected) =&gt; {
+  expect(countClumps(nums)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<p>100% 分支覆盖！可是这个测试集<strong>很弱</strong>。即使不做系统的规格测试，数团块的程序也理应试试：</p>
+
+<div class="cards">
+  <div class="card"><h4>多个团块</h4><p><code>[1,1,2,3,3]</code> → 2</p></div>
+  <div class="card"><h4>团块在开头</h4><p><code>[2,2,1]</code> → 1</p></div>
+  <div class="card"><h4>团块在结尾</h4><p><code>[1,2,2]</code> → 1</p></div>
+  <div class="card"><h4>整个数组就是团块</h4><p><code>[2,2]</code> → 1（仓库里特意补上了这个用例）</p></div>
+</div>
+
+<p>这些情况都会重复经过已经覆盖过的行和分支，所以覆盖率完全不会提醒你。<strong>结构化测试的价值，只有和规格知识结合时才能体现</strong>。这又是一个不能盲目依赖覆盖率的理由。</p>
+
+<h2 id="real-world">现实中的结构化测试</h2>
+
+<h3>为什么有人讨厌覆盖率？</h3>
+<p>
+  流行的说法是：「写一个没有断言的测试也能 100% 覆盖，但什么都没测！」没错。可这个论点假设了最糟糕、最不现实的情况 ——
+  如果你的测试连断言都没有，那你在享受结构化测试的好处之前，有更大的问题要解决。
+</p>
+<p>
+  这句话背后真正的意思是：<em>不要盲目看覆盖率数字</em>。这一点作者完全同意。问题出在人们<strong>如何看待</strong>覆盖率：
+  如果它只是一个要达成的数字，你就会写出没用的测试来「刷指标」。本章的用法是：补充规格测试、快速找出没执行到的代码、发现分区时漏掉的情况。
+  高覆盖率可能是这么做的<em>结果</em>，但不是目的。如果某行没覆盖，那应该是因为你想过并决定不覆盖它。
+</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 实证研究怎么说</div>
+  <ul>
+    <li><strong>Hutchins 等（1994）：</strong>覆盖率超过 90% 的测试集，通常比同样大小的随机测试集发现缺陷的能力显著更强；覆盖率从 90% 提到 100% 时效果常有明显提升。但单独的 100% 覆盖并不是可靠的有效性指标。</li>
+    <li><strong>Namin 和 Andrews（2009）：</strong>控制测试集大小后，覆盖率有时与有效性相关；同时考虑大小和覆盖率比只看大小预测得更准。</li>
+    <li><strong>Inozemtseva 和 Holmes（2014）：</strong>控制用例数后，覆盖率与有效性只有低到中度相关；更强的覆盖形式也没提供更多洞察。覆盖率适合找出测试不足的部分，但不应当作质量目标。</li>
+    <li><strong>Gopinath 等（2020）：</strong>在数百个 Java 程序中，语句、块、分支、路径覆盖都与变异杀死率相关，其中语句覆盖是最好的预测指标。</li>
+  </ul>
+  <p>
+    作者的解读：用规格测试覆盖所有分区，往往也覆盖了大部分代码；反过来，覆盖了大部分代码，通常也覆盖了大部分分区。
+    <strong>100% 覆盖不代表测好了，但 10% 覆盖一定代表没测好。</strong>推荐阅读 Google 的《Code Coverage Best Practices》（2020）。
+  </p>
+</div>
+
+<h3>覆盖率怎么算</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="覆盖率计算示例：if(x) 与 if(x||y)">
+  <polygon points="130,20 210,50 130,80 50,50" class="bx-b"/>
+  <text class="mono on-b" x="130" y="55" text-anchor="middle">if (x)</text>
+  <path class="ln-g" d="M90 66 L70 106" marker-end="url(#ar-g)"/><text class="sm on-g" x="46" y="92">true</text>
+  <path class="ln-r" d="M170 66 L190 106" marker-end="url(#ar-r)"/><text class="sm on-r" x="186" y="86">false</text>
+  <rect class="bx-g" x="30" y="110" width="80" height="30" rx="6"/><text class="lbl on-g" x="70" y="130" text-anchor="middle">Do A</text>
+  <rect class="bx" x="150" y="110" width="80" height="30" rx="6"/><text class="lbl" x="190" y="130" text-anchor="middle">Do B</text>
+  <text class="lbl" x="30" y="170">T1 让 x 为真：</text>
+  <text class="lbl" x="30" y="192">• 行覆盖 2/3 = 66.6%</text>
+  <text class="lbl" x="30" y="214">• 分支覆盖 1/2 = 50%</text>
+
+  <polygon points="520,20 610,50 520,80 430,50" class="bx-b"/>
+  <text class="mono on-b" x="520" y="55" text-anchor="middle">if (x || y)</text>
+  <path class="ln-g" d="M478 66 L458 106" marker-end="url(#ar-g)"/><text class="sm on-g" x="434" y="92">true</text>
+  <path class="ln-r" d="M562 66 L582 106" marker-end="url(#ar-r)"/><text class="sm on-r" x="578" y="86">false</text>
+  <rect class="bx-g" x="418" y="110" width="80" height="30" rx="6"/><text class="lbl on-g" x="458" y="130" text-anchor="middle">Do A</text>
+  <rect class="bx" x="542" y="110" width="80" height="30" rx="6"/><text class="lbl" x="582" y="130" text-anchor="middle">Do B</text>
+  <text class="lbl" x="400" y="170">T1 让 x 为真（y 被短路）：</text>
+  <text class="lbl" x="400" y="192">• 行覆盖 2/3 = 66.6%</text>
+  <text class="lbl" x="400" y="214">• 分支覆盖 1/2 = 50%</text>
+  <text class="lbl" x="400" y="236">• 条件+分支 (1 + 2)/(2 + 4) = 50%</text>
+</svg>
+<figcaption>图 3-11　三种覆盖率的计算方式（不同工具的公式略有差异，以工具手册为准）</figcaption>
+</figure>
+
+<div class="tw">
+<table>
+  <tr><th>指标</th><th>公式</th></tr>
+  <tr><td>行覆盖率</td><td>被覆盖的行数 ÷ 总行数 × 100%</td></tr>
+  <tr><td>分支覆盖率</td><td>被覆盖的分支数 ÷ 总分支数 × 100%</td></tr>
+  <tr><td>条件+分支覆盖率</td><td>(被覆盖的分支数 + 被覆盖的条件取值数) ÷ (总分支数 + 总条件取值数) × 100%</td></tr>
+</table>
+</div>
+
+<p>
+  例：<code>if (x || y)</code> 有 2 个分支、4 个条件取值（x 真/假、y 真/假）。两个测试 T1=(真,真)、T2=(假,真)：两次整个 if 都为真，只覆盖了 1 个分支；
+  x 真假都有，y 只有真 —— 覆盖了 3 个条件取值。所以是 (1 + 3) / (2 + 4) = <strong>66.6%</strong>。
+</p>
+
+<h3>用哪个准则？</h3>
+<p>
+  看情况：你正在测什么、要多严格。深入代码时，你可能对这个 if 用分支覆盖，对那个 if 用 MC/DC。这让方法不那么「系统」，但这是作者所知最务实的做法。
+  <strong>作者的经验法则：</strong>至少覆盖所有分支；遇到较复杂的表达式，考虑条件+分支覆盖；遇到更复杂的，考虑 MC/DC。
+</p>
+
+<h3>MC/DC 的高光时刻</h3>
+<p>
+  表达式越复杂，MC/DC 越有价值。Chilenski 2001 年的论文里有一个来自 A 级飞行模拟程序的条件，包含 <strong>76 个条件</strong>。
+  路径覆盖需要 2⁷⁶ ≈ 7.5 × 10²² 个测试 —— 不可能。能拆就拆成小块；实在拆不了，MC/DC 就派上用场了。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; SQLite 的故事</div>
+  <p>
+    SQLite 作者 Richard Hipp 在播客里说：他决定把测试做到 <strong>100% MC/DC</strong>，花了整整一年、每周 60 小时。
+    「达到 90% 或 95% 很容易，最后那 5% 真的非常非常难……但做到之后，我们再也没收到来自 Android 的 Bug 报告。」
+  </p>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; MC/DC 的几个补充</div>
+  <ul>
+    <li><strong>唯一原因 MC/DC vs 掩码 MC/DC：</strong>本章用的是唯一原因（unique-cause）版本：独立性对中只有一个条件和结果改变。但像 <code>(A &amp;&amp; B) || (A &amp;&amp; C)</code>，没法只改第一个 A 而不改第二个 A。这时允许 A 一起变、固定其余变量，叫掩码（masked）MC/DC。</li>
+    <li><strong>有些表达式做不到 MC/DC：</strong>比如 <code>(A &amp;&amp; B) || (A &amp;&amp; !B)</code>，找不到 B 的独立性对 —— 因为 B 根本不影响结果，表达式可以简化为 <code>A</code>。遇到这种情况，回头审视表达式的设计。</li>
+    <li><strong>N + 1 是理论下限：</strong>有些表达式需要更多测试，但 Chilenski 的研究表明，实践中大多数表达式恰好需要 N + 1 个。</li>
+  </ul>
+</div>
+
+<h3>其他覆盖准则</h3>
+<p>本章一直用<strong>控制流</strong>推导测试。另一种思路是看<strong>数据流</strong>：一个变量被定义、被修改了一两三次、然后被使用，你可能想确保覆盖它被「触碰」的所有方式。本书不展开，推荐 Pezzè 和 Young（2008）的讲解。</p>
+
+<h3>什么不该覆盖？</h3>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="不值得追求 100% 覆盖的方法"><pre>
+public static String resourceFolder(String path) {
+  try {
+    return Paths.get(ResourceUtils.class
+        .getResource("/").toURI()).toString() + path;
+  } catch (URISyntaxException e) {
+    throw new RuntimeException(e);   // 要覆盖这行，得想办法让 toURI() 抛异常
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="不值得追求 100% 覆盖的函数"><pre>
+def resource_folder(path: str) -&gt; str:
+    try:
+        return str(Path(importlib.resources.files("myapp"))) + path
+    except OSError as e:               # 要覆盖这行，得想办法让标准库抛异常
+        raise RuntimeError(e) from e
+</pre></div>
+<div class="code" data-lang="ts" data-file="不值得追求 100% 覆盖的函数"><pre>
+export function resourceFolder(path: string): string {
+  try {
+    return fileURLToPath(new URL("./", import.meta.url)) + path;
+  } catch (e) {                        // 要覆盖这行，得想办法让 URL 解析抛异常
+    throw new Error("cannot resolve resource folder", { cause: e });
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  要覆盖 catch 块，得用 Mock 之类的手段强迫底层 API 抛异常。作者看不出这么做有什么好处。
+  更重要的是测试<strong>系统其他部分在 resourceFolder 抛异常时会怎样</strong> —— 那更容易，因为我们对 resourceFolder 的控制远比对标准库强。
+  作者也通常不为 <code>equals</code>、<code>hashCode</code> 和简单的 getter/setter 写专门的测试，它们会被使用它们的其他测试间接覆盖。
+</p>
+
+<div class="box key">
+  <div class="t">&#128273; 默认所有代码都该覆盖，除非证明不需要</div>
+  <p>作者从「应该 100% 覆盖」出发；发现某段代码不需要覆盖时，再做例外。但要小心 —— 经验表明，<strong>Bug 往往出现在你覆盖得不好的地方</strong>。</p>
+</div>
+
+<h2 id="mutation">变异测试：测试的杀伤力够吗？</h2>
+
+<p>
+  所有覆盖准则都只关心「生产代码被执行了多少」，没人检查<strong>断言够不够强</strong>。
+  如果我在一行被测试覆盖的代码里故意放一个 Bug，测试会失败吗？这就是<strong>变异测试（mutation testing）</strong>的思路。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="变异测试流程：从原程序生成多个变异体，对每个变异体跑测试，测试失败则变异体被杀死，全部通过则变异体存活">
+  <rect class="bx-g" x="20" y="110" width="150" height="70" rx="12"/>
+  <text class="ttl on-g" x="95" y="138" text-anchor="middle">原程序</text>
+  <text class="mono" x="95" y="160" text-anchor="middle">if (pads &lt;= 0)</text>
+
+  <path class="ln" d="M172 130 L226 62" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 145 H226" marker-end="url(#ar)"/>
+  <path class="ln" d="M172 160 L226 228" marker-end="url(#ar)"/>
+  <text class="sm" x="190" y="104">变异</text>
+
+  <rect class="bx-r" x="230" y="36" width="170" height="52" rx="10"/>
+  <text class="lbl on-r" x="315" y="58" text-anchor="middle">变异体 1</text>
+  <text class="mono" x="315" y="77" text-anchor="middle">pads = size + strLen</text>
+  <rect class="bx-r" x="230" y="119" width="170" height="52" rx="10"/>
+  <text class="lbl on-r" x="315" y="141" text-anchor="middle">变异体 2</text>
+  <text class="mono" x="315" y="160" text-anchor="middle">if (true)</text>
+  <rect class="bx-r" x="230" y="202" width="170" height="52" rx="10"/>
+  <text class="lbl on-r" x="315" y="224" text-anchor="middle">变异体 3</text>
+  <text class="mono" x="315" y="243" text-anchor="middle">if (pads &lt; 0)</text>
+
+  <path class="ln" d="M402 62 H456" marker-end="url(#ar)"/>
+  <path class="ln" d="M402 145 H456" marker-end="url(#ar)"/>
+  <path class="ln" d="M402 228 H456" marker-end="url(#ar)"/>
+  <text class="sm" x="430" y="104" text-anchor="middle">跑整个</text>
+  <text class="sm" x="430" y="118" text-anchor="middle">测试套件</text>
+
+  <rect class="bx-g" x="460" y="36" width="280" height="52" rx="10"/>
+  <text class="ttl on-g" x="600" y="58" text-anchor="middle">✔ 有测试失败 → 变异体被杀死</text>
+  <text class="sm" x="600" y="77" text-anchor="middle">T6 等用例的结果变了，加一分</text>
+  <rect class="bx-g" x="460" y="119" width="280" height="52" rx="10"/>
+  <text class="ttl on-g" x="600" y="141" text-anchor="middle">✔ 被杀死</text>
+  <text class="sm" x="600" y="160" text-anchor="middle">T2 期望 "-----"，却得到 ""</text>
+  <rect class="bx-r" x="460" y="202" width="280" height="52" rx="10"/>
+  <text class="ttl on-r" x="600" y="224" text-anchor="middle">✘ 全部通过 → 变异体存活</text>
+  <text class="sm" x="600" y="243" text-anchor="middle">测试集有漏洞，见下文分析</text>
+  <text class="sm" x="380" y="282" text-anchor="middle">变异分数 = 被杀死的变异体 ÷ 全部变异体；杀死全部 = 100% 变异覆盖</text>
+</svg>
+<figcaption>图 3-12　变异测试：故意制造 Bug，看测试能不能抓住它（以 leftPad 为例）</figcaption>
+</figure>
+
+<dl class="terms">
+  <dt>变异体（mutant）</dt><dd>对原程序做一个微小改动后得到的「有 Bug 的版本」。</dd>
+  <dt>杀死（kill）/ 存活（survive）</dt><dd>测试集在变异体上失败 = 杀死它；全部通过 = 它存活。</dd>
+  <dt>称职程序员假设（competent programmer hypothesis）</dt><dd>程序由称职的程序员编写，要么是对的，要么和正确版本只差几个简单错误。</dd>
+  <dt>耦合效应（coupling effect）</dt><dd>复杂的 Bug 是由许多小 Bug 组合而成的。所以能抓住简单 Bug 的测试集，也能抓住复杂的。</dd>
+</dl>
+
+<p>Java 最流行的变异测试工具是 <strong>Pitest（PIT）</strong>。它的一些变异算子（mutator）：</p>
+
+<div class="tw">
+<table>
+  <tr><th>变异算子</th><th>做什么</th><th>例子</th></tr>
+  <tr><td>条件边界</td><td>替换关系运算符</td><td><code>&lt;</code> → <code>&lt;=</code></td></tr>
+  <tr><td>自增</td><td>交换自增和自减</td><td><code>i++</code> → <code>i--</code></td></tr>
+  <tr><td>取反</td><td>把变量取负</td><td><code>i</code> → <code>-i</code></td></tr>
+  <tr><td>数学运算符</td><td>替换算术运算符</td><td><code>+</code> → <code>-</code></td></tr>
+  <tr><td>返回 true</td><td>把布尔返回值替换成 true</td><td><code>return x &gt; 0</code> → <code>return true</code></td></tr>
+  <tr><td>删除条件</td><td>把整个 if 换成 <code>if (true)</code></td><td><code>if (a) {…}</code> → <code>if (true) {…}</code></td></tr>
+</table>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="bash" data-file="Java：Pitest（本仓库 ch3 已配置）"><pre>
+cd ch3
+mvn clean compile test-compile pitest:mutationCoverage
+# 报告在 target/pit-reports/&lt;时间戳&gt;/index.html
+# 或者直接运行仓库里的脚本：./mutation.sh
+</pre></div>
+<div class="code" data-lang="bash" data-file="Python：mutmut"><pre>
+pip install mutmut
+# 默认变异 src 下的代码并用 pytest 跑测试
+mutmut run
+mutmut results            # 列出存活的变异体
+mutmut show &lt;id&gt;          # 查看某个变异体改了什么
+</pre></div>
+<div class="code" data-lang="bash" data-file="TypeScript：StrykerJS"><pre>
+npm i -D @stryker-mutator/core @stryker-mutator/vitest-runner
+npx stryker init          # 交互式生成 stryker.config.json，测试运行器选 vitest
+npx stryker run           # HTML 报告在 reports/mutation/mutation.html
+</pre></div>
+</div>
+
+<h3>分析存活的变异体</h3>
+<p>
+  变异工具不理解你的代码，它只是机械地改代码，所以会产生一些<strong>没意义的变异体</strong>。
+  比如 Pitest 把 <code>int pads = size - strLen</code> 里的 size 变成了 <code>size++</code>（先用后加）。测试没抓住它 ——
+  但这不是有用的变异体：size 在这一行之后再也没被用过，加不加 1 对程序毫无影响。这种和原程序行为完全等价的变异体叫<strong>等价变异体</strong>。
+  所以，要逐个分析存活的变异体，而不是盲目追求 100%。
+</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 一个有趣的存活者：pads &lt;= 0 → pads &lt; 0</div>
+  <p>
+    当 size 恰好等于 str 的长度（T7：<code>leftPad("abc", 3, "-")</code>）时，pads = 0。变异后不再直接返回，而是落进 <code>pads &lt; padLen</code> 分支，
+    返回 <code>"".concat("abc")</code> —— <em>内容</em>还是 "abc"。T7 只比较内容，杀不死它；<code>sameInstance</code> 用的是 size=5 &lt; 8，pads 为负，也碰不到 pads == 0。
+    所以在 Java 里这个变异体<strong>会存活</strong>，而且它暴露了一个真实的漏洞：「不需要填充时返回原对象」这个承诺在 pads == 0 时被打破了，我们却没发现。
+    要杀死它，就补一个 <code>assertThat(leftPad(str, str.length(), "-")).isSameAs(str)</code>。
+  </p>
+  <p>
+    同一个变异放到别的语言里意义就不同了：TypeScript 的字符串是原始值，根本没有「同一个对象」的说法；CPython 里 <code>"" + s</code> 直接返回 <code>s</code> 本身。
+    在这两种语言里它是<strong>等价变异体</strong>，永远杀不死，也不需要杀。这正是「存活的变异体必须人工逐个分析」的原因。
+  </p>
+</div>
+
+<h3>代价与收益</h3>
+<p>
+  变异测试最大的问题是<strong>成本</strong>：要生成大量变异体，每个都跑一遍完整测试。研究者在努力降低成本：减少变异体数量、自动识别等价变异体、减少要执行的测试。
+  但收益很可观：Parsai 和 Demeyer（2020）表明，变异覆盖能揭示分支覆盖发现不了的测试弱点，而且构建时的性能开销可以接受；Google 也在自己的系统中投资变异测试。
+  变异的思想还被用到了 HTML DOM（检验 Web 测试是否够强）和 SQL 查询上。
+</p>
+<p><strong>建议：</strong>对整个系统跑变异测试可能太贵，但对系统中<strong>敏感的一小部分类</strong>跑一跑是可行的，常常能告诉你还该测什么。</p>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>结构化测试利用源代码，来增强通过规格测试设计出的测试集。</li>
+  <li>核心思路：分析哪些代码还没被覆盖，思考它们该不该被覆盖。</li>
+  <li>有些准则不那么严格也更便宜（如行覆盖），有些更严格也更贵（如 MC/DC）。选哪个由开发者决定。</li>
+  <li>覆盖率不应该被当成要达成的数字，而应该用来辅助结构化测试：理解哪些部分没覆盖、为什么。</li>
+  <li>变异测试检验测试集是否足够强，也就是能否抓住尽可能多的 Bug。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>3.1　21 点游戏：<code>play(left, right)</code> 先把超过 21 的一方置 0，再返回较大者。用 left=22、right=21 测试，行覆盖率是多少？（不计函数签名和最后的花括号，共 10 行）</summary>
+<pre class="code" style="padding:10px 14px;color:var(--code-fg);font-size:13px">01. public int play(int left, int right) {
+02.   int ln = left;
+03.   int rn = right;
+04.   if (ln &gt; 21)
+05.     ln = 0;
+06.   if (rn &gt; 21)
+07.     rn = 0;
+08.   if (ln &gt; rn)
+09.     return ln;
+10.   else
+11.     return rn;
+12. }</pre>
+<p><strong>80%</strong>。第 2–4、6、8 行总会执行；第 4 行为真，所以第 5 行执行；第 6 行 right=21 为假，第 7 行没执行；第 8 行（此时 ln=0）为假，第 9 行没执行，第 10、11 行执行。10 行中覆盖 8 行。</p></details>
+
+<details class="quiz"><summary>3.2　为 JDK 8 <code>LinkedList.remove(Object o)</code> 设计一个达到 100% 行覆盖、测试数最少的测试集。</summary>
+<p>需要 3 个测试：① 列表中有 null，删除 null（覆盖 o == null 分支里的 unlink 和 return true）；② 列表中有 7，删除 7（覆盖 else 分支里的 unlink 和 return true）；③ 空列表删除 5（覆盖最后的 return false）。满足条件的测试集不唯一。</p>
+<div class="langs">
+<div class="code" data-lang="java"><pre>
+@Test void removeNullInList() {
+  LinkedList&lt;Integer&gt; list = new LinkedList&lt;&gt;();
+  list.add(null);
+  assertTrue(list.remove(null));
+}
+@Test void removeElementInList() {
+  LinkedList&lt;Integer&gt; list = new LinkedList&lt;&gt;();
+  list.add(7);
+  assertTrue(list.remove(7));
+}
+@Test void removeElementNotPresentInList() {
+  LinkedList&lt;Integer&gt; list = new LinkedList&lt;&gt;();
+  assertFalse(list.remove(5));
+}
+</pre></div>
+</div></details>
+
+<details class="quiz"><summary>3.3　<code>computeIfPresent(key, rf)</code>：rf 为 null 抛异常；找到节点且旧值非 null 时调用 rf，结果非 null 则更新，否则删除节点。达到 100% 分支覆盖最少要几个测试？（2 / 3 / 4 / 6）</summary>
+<p><strong>4 个</strong>。一个覆盖 rf == null 为真；一个让 rf 检查和「节点存在且旧值非 null」都为假；再各用一个覆盖「新值非 null」的真、假两个分支。</p></details>
+
+<details class="quiz"><summary>3.4　表达式 <code>(A &amp; B) | C</code>，哪些测试集达到 100% MC/DC？（A {2,3,4,6}　B {2,4,5,6}　C {1,3,4,6}　D {3,4,5,8}）真值表同 CountWords 的顺序：1=TTT … 8=FFF。</summary>
+<p><strong>A 和 B</strong>。</p></details>
+
+<details class="quiz"><summary>3.5　画出 <code>A &amp;&amp; (A || B)</code> 的真值表。能达到 MC/DC 吗？你会对写这个表达式的开发者说什么？</summary>
+<div class="tw"><table class="tt">
+<tr><th>用例</th><th>A</th><th>B</th><th>结果</th></tr>
+<tr><td>1</td><td class="F">F</td><td class="F">F</td><td class="F">F</td></tr>
+<tr><td>2</td><td class="F">F</td><td class="T">T</td><td class="F">F</td></tr>
+<tr><td>3</td><td class="T">T</td><td class="F">F</td><td class="T">T</td></tr>
+<tr><td>4</td><td class="T">T</td><td class="T">T</td><td class="T">T</td></tr>
+</table></div>
+<p>A 的独立性对：{1,3}、{2,4}；B <strong>没有</strong>独立性对，所以无法达到 MC/DC。B 根本不影响结果 —— 建议开发者把表达式简化为 <code>A</code>，更易维护。测试者不仅能发现 Bug，也能帮助提升代码质量。</p></details>
+
+<details class="quiz"><summary>3.6　<code>sameEnds(string)</code> 有一个 for 循环和循环内的 if。下列哪项<em>不</em>正确？（A 一个测试可以同时达到 100% 行覆盖和判定覆盖　B 一个测试可以同时达到 100% 行覆盖和基本条件覆盖　C 一个测试可以同时达到 100% 行覆盖和判定+条件覆盖　D 一个测试可以同时达到 100% 行覆盖和路径覆盖）</summary>
+<p><strong>D</strong>。循环使得 100% 路径覆盖不可能 —— 你得测试所有可能的迭代次数。其他三项用 <code>"aXYa"</code> 这样一个输入就能做到。</p></details>
+
+<details class="quiz"><summary>3.7　关于准则包含关系，哪项正确？（A MC/DC 包含语句覆盖　B 语句覆盖包含分支覆盖　C 分支覆盖包含路径覆盖　D 基本条件覆盖包含分支覆盖）</summary>
+<p><strong>A</strong>。D 是错的：基本条件覆盖不包含分支覆盖（不过「完整条件覆盖」即条件+分支覆盖是包含的）。</p></details>
+
+<details class="quiz"><summary>3.8　测试集满足循环边界充分性准则，当且仅当对每个循环 L……</summary>
+<p><strong>有测试让 L 迭代 0 次、1 次、多于 1 次。</strong></p></details>
+
+<details class="quiz"><summary>3.9　关于规格测试与结构化测试的关系，哪项正确？（A 应该优先结构化测试，更便宜更有效　B 规格测试需要正式模型，用户故事不够　C 边界分析只能在有源代码时做，属于结构化技术　D 以上都不对）</summary>
+<p><strong>D</strong>。没有研究支持结构化测试应优先于规格测试；规格测试需要好的需求，但不需要正式模型；边界分析既可以基于规格也可以基于代码。</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch3</code> 目录运行 <code>./coverage.sh</code>（或 <code>mvn clean test jacoco:report</code>），打开报告，找到 <code>LeftPadUtils</code>。然后把 T10、T11 注释掉重新跑，观察哪两行变红。</li>
+    <li>运行 <code>./mutation.sh</code>，打开 PIT 报告，挑两个存活的变异体：它是等价变异体吗？如果不是，写一个测试杀死它。</li>
+    <li><code>CountWordsTest</code> 顶部注释写着「这个测试集不完整，请做规格测试！」—— 那就做吧：用第 2 章的七步法为 CountWords 设计完整测试（提示：空字符串、标点、数字、大写 S、连续空格……）。</li>
+    <li>用 Python 或 TypeScript 实现 countClumps，只写上面 4 个「结构化」测试，再用 mutmut 或 Stryker 跑一次变异测试，看看存活了多少变异体。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

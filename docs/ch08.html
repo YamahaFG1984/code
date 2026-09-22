@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 8 章 · 测试驱动开发 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="8">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 8 章</span>
+<h1>测试驱动开发</h1>
+<p class="lede">
+  我们习惯了「先写代码，再测试」。为什么不反过来？先写一个测试，描述你想实现的下一个小功能 —— 它当然会失败，因为功能还不存在；
+  然后写代码让它通过；测试变绿后，回头重构刚写的代码。这就是<strong>测试驱动开发（TDD）</strong>。
+  这一章用「罗马数字转整数」完整走一遍 TDD，然后冷静地讨论：它到底好在哪里，研究怎么说，什么时候不必用它。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>亲手走一遍红—绿—重构循环</li>
+    <li>理解「小步前进」和「用测试控制节奏」</li>
+    <li>知道 TDD 的好处、实证研究的结论，以及何时不用它</li>
+    <li>了解经典派（Detroit）与伦敦派（London）两种 TDD 流派</li>
+    <li>分清 TDD 和系统化测试：一个帮你开发，一个帮你找 Bug</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="cycle">红—绿—重构</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="TDD 循环：写一个失败的测试（红），写代码让它通过（绿），重构，然后重复">
+  <circle cx="380" cy="150" r="118" style="fill:none;stroke:var(--line-2);stroke-width:1.5;stroke-dasharray:5 4"/>
+  <rect class="bx-r" x="300" y="12" width="160" height="62" rx="31"/>
+  <text class="ttl on-r" x="380" y="38" text-anchor="middle">① 红</text>
+  <text class="sm" x="380" y="58" text-anchor="middle">写一个（简单的）测试</text>
+  <rect class="bx-g" x="480" y="190" width="170" height="62" rx="31"/>
+  <text class="ttl on-g" x="565" y="216" text-anchor="middle">② 绿</text>
+  <text class="sm" x="565" y="236" text-anchor="middle">写刚好够用的代码让它通过</text>
+  <rect class="bx-b" x="110" y="190" width="170" height="62" rx="31"/>
+  <text class="ttl on-b" x="195" y="216" text-anchor="middle">③ 重构</text>
+  <text class="sm" x="195" y="236" text-anchor="middle">改进生产代码和测试代码</text>
+  <path class="ln-r" d="M462 52 C560 70 600 130 580 186" marker-end="url(#ar-r)"/>
+  <text class="sm on-r" x="590" y="110">测试失败</text>
+  <path class="ln-g" d="M478 222 H284" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="380" y="214" text-anchor="middle">测试通过</text>
+  <path class="ln-b" d="M180 186 C160 130 200 70 296 52" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="120" y="110">下一个例子</text>
+  <text class="lbl" x="380" y="150" text-anchor="middle">每一圈都很小</text>
+  <text class="sm" x="380" y="170" text-anchor="middle">几分钟一次</text>
+</svg>
+<figcaption>图 8-1　TDD，又称红—绿—重构循环</figcaption>
+</figure>
+
+<h2 id="session">第一次 TDD：罗马数字转换器</h2>
+
+<div class="box key">
+  <div class="t">&#128203; 需求</div>
+  <p>实现一个程序，接收一个罗马数字（字符串），返回它的阿拉伯数字表示（整数）。</p>
+  <p>罗马数字用七个符号：<code>I</code>=1，<code>V</code>=5，<code>X</code>=10，<code>L</code>=50，<code>C</code>=100，<code>D</code>=500，<code>M</code>=1000。组合规则：</p>
+  <ul>
+    <li>右边的数字小于或等于左边时，<strong>加</strong>上去：XV = 10 + 5 = 15；</li>
+    <li>左边的数字小于右边时，<strong>减</strong>掉：XXIV = 10 + 10 − 1 + 5 = 24。</li>
+  </ul>
+</div>
+
+<p><strong>想出例子是 TDD 的一部分。</strong>作者想到的例子，按难度分组：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="TDD 例子清单：单字符、多字符、简单减法、复杂减法，从简单到难">
+  <rect class="bx-g" x="14" y="20" width="175" height="110" rx="10"/>
+  <text class="ttl on-g" x="101" y="44" text-anchor="middle">单个字符</text>
+  <text class="mono" x="101" y="70" text-anchor="middle">I → 1</text>
+  <text class="mono" x="101" y="90" text-anchor="middle">V → 5</text>
+  <text class="mono" x="101" y="110" text-anchor="middle">X → 10</text>
+  <rect class="bx-b" x="200" y="20" width="175" height="110" rx="10"/>
+  <text class="ttl on-b" x="287" y="44" text-anchor="middle">多个字符（只加）</text>
+  <text class="mono" x="287" y="70" text-anchor="middle">II → 2　III → 3</text>
+  <text class="mono" x="287" y="90" text-anchor="middle">VI → 6</text>
+  <text class="mono" x="287" y="110" text-anchor="middle">XVII → 17</text>
+  <rect class="bx-a" x="386" y="20" width="175" height="110" rx="10"/>
+  <text class="ttl on-a" x="473" y="44" text-anchor="middle">简单减法</text>
+  <text class="mono" x="473" y="80" text-anchor="middle">IV → 4</text>
+  <text class="mono" x="473" y="100" text-anchor="middle">IX → 9</text>
+  <rect class="bx-p" x="572" y="20" width="175" height="110" rx="10"/>
+  <text class="ttl on-p" x="659" y="44" text-anchor="middle">多字符 + 减法</text>
+  <text class="mono" x="659" y="80" text-anchor="middle">XIV → 14</text>
+  <text class="mono" x="659" y="100" text-anchor="middle">XXIX → 29</text>
+  <path class="ln-a" d="M30 150 H730" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="380" y="166" text-anchor="middle">从最简单的开始，一个一个往右走</text>
+</svg>
+<figcaption>图 8-2　TDD 会话的例子清单</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; 空字符串、null 呢？</div>
+  <p>值得测。但做 TDD 时，作者先关注正常路径和业务规则，边界和异常情况留到后面。记住：我们现在<strong>不是在测试模式</strong>，而是在开发模式 —— 想出输入输出，让它们引导实现。实现完成后，再用前几章的所有技术做严格的测试。</p>
+</div>
+
+<p>每一圈都这样走：</p>
+<ol class="steps">
+  <li>从清单里挑<strong>最简单</strong>的例子。</li>
+  <li>写一个自动化测试，用这个输入调用程序，断言期望的输出。此时代码可能连编译都过不了；就算能编译，测试也会失败，因为功能还没实现。</li>
+  <li>写<strong>刚好够</strong>让这个测试通过的生产代码。</li>
+  <li>停下来反思：可以改进生产代码吗？可以改进测试代码吗？可以往清单里加更多例子吗？</li>
+  <li>重复。</li>
+</ol>
+
+<h3>第 1 圈：I → 1</h3>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="RomanNumeralConverterTest.java（红：编译都过不了）"><pre>
+public class RomanNumeralConverterTest {
+  @Test
+  void shouldUnderstandSymbolI() {
+    RomanNumeralConverter roman = new RomanNumeralConverter();   // 这个类还不存在！
+    int number = roman.convert("I");
+    assertThat(number).isEqualTo(1);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_roman.py（红：导入都失败）"><pre>
+from roman import convert        # 这个模块还不存在！
+
+def test_should_understand_symbol_i():
+    assert convert("I") == 1
+</pre></div>
+<div class="code" data-lang="ts" data-file="roman.test.ts（红：编译都过不了）"><pre>
+import { test, expect } from "vitest";
+import { convert } from "./roman";   // 这个模块还不存在！
+
+test("should understand symbol I", () =&gt; {
+  expect(convert("I")).toBe(1);
+});
+</pre></div>
+</div>
+
+<p>先写一个空架子让它能编译。跑测试：期望 1，实际 0 —— <strong>红了</strong>。这没问题，我们本来就预期它失败：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="RomanNumeralConverter.java（骨架）"><pre>
+public class RomanNumeralConverter {
+  public int convert(String numberInRoman) {
+    return 0;          // 我们并不想返回 0，这只是为了让测试能编译
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="roman.py（骨架）"><pre>
+def convert(numeral: str) -&gt; int:
+    return 0           # 我们并不想返回 0，这只是为了让测试能运行
+</pre></div>
+<div class="code" data-lang="ts" data-file="roman.ts（骨架）"><pre>
+export function convert(numeral: string): number {
+  return 0;            // 我们并不想返回 0，这只是为了让测试能编译
+}
+</pre></div>
+</div>
+
+<p>现在写<strong>刚好够</strong>让测试通过的代码。看起来很怪：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="绿：直接返回 1"><pre>
+public int convert(String numberInRoman) {
+  return 1;            // 测试通过了。但这是我们想要的实现吗？
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="绿：直接返回 1"><pre>
+def convert(numeral: str) -&gt; int:
+    return 1           # 测试通过了。但这是我们想要的实现吗？
+</pre></div>
+<div class="code" data-lang="ts" data-file="绿：直接返回 1"><pre>
+export function convert(numeral: string): number {
+  return 1;            // 测试通过了。但这是我们想要的实现吗？
+}
+</pre></div>
+</div>
+
+<p>只对一种情况有效。没关系，我们还在实现中，这叫<strong>小步前进（baby steps）</strong>。</p>
+
+<h3>第 2 圈：V → 5</h3>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="红：第二个测试 → 绿：硬编码的 if"><pre>
+@Test
+void shouldUnderstandSymbolV() {
+  RomanNumeralConverter roman = new RomanNumeralConverter();
+  int number = roman.convert("V");
+  assertThat(number).isEqualTo(5);
+}
+
+// 让两个测试都通过的最简单办法：硬编码的 if
+public int convert(String numberInRoman) {
+  if (numberInRoman.equals("I")) return 1;
+  if (numberInRoman.equals("V")) return 5;
+  return 0;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="红：第二个测试 → 绿：硬编码的 if"><pre>
+def test_should_understand_symbol_v():
+    assert convert("V") == 5
+
+# 让两个测试都通过的最简单办法：硬编码的 if
+def convert(numeral: str) -&gt; int:
+    if numeral == "I":
+        return 1
+    if numeral == "V":
+        return 5
+    return 0
+</pre></div>
+<div class="code" data-lang="ts" data-file="红：第二个测试 → 绿：硬编码的 if"><pre>
+test("should understand symbol V", () =&gt; {
+  expect(convert("V")).toBe(5);
+});
+
+// 让两个测试都通过的最简单办法：硬编码的 if
+export function convert(numeral: string): number {
+  if (numeral === "I") return 1;
+  if (numeral === "V") return 5;
+  return 0;
+}
+</pre></div>
+</div>
+
+<h3>第 3 圈：推广到所有单字符（重构）</h3>
+
+<p>
+  可以对 X、L、C、M 重复这个过程，但我们已经知道实现首先要推广什么：<strong>罗马数字只有一个符号时，返回它对应的整数</strong>。
+  可以写一串 if、一个 switch，或者一张查找表 —— 作者选了查找表，纯属个人喜好。生产代码推广了，测试代码也应该推广：两个单独的测试合成一个参数化测试。
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="查找表 + 参数化测试"><pre>
+public class RomanNumeralConverter {
+  private static Map&lt;String, Integer&gt; table = new HashMap&lt;&gt;() {{   // 符号 → 数值
+    put("I", 1);
+    put("V", 5);
+    put("X", 10);
+    put("L", 50);
+    put("C", 100);
+    put("D", 500);
+    put("M", 1000);
+  }};
+
+  public int convert(String numberInRoman) {
+    return table.get(numberInRoman);
+  }
+}
+
+@ParameterizedTest
+@CsvSource({"I,1", "V,5", "X,10", "L,50", "C, 100", "D, 500", "M, 1000"})
+void shouldUnderstandOneCharNumbers(String romanNumeral, int expectedNumberAfterConversion) {
+  RomanNumeralConverter roman = new RomanNumeralConverter();
+  int convertedNumber = roman.convert(romanNumeral);
+  assertThat(convertedNumber).isEqualTo(expectedNumberAfterConversion);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="查找表 + 参数化测试"><pre>
+TABLE = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}   # 符号 → 数值
+
+def convert(numeral: str) -&gt; int:
+    return TABLE[numeral]
+
+# ---- test_roman.py ----
+import pytest
+
+@pytest.mark.parametrize("numeral, expected", [
+    ("I", 1), ("V", 5), ("X", 10), ("L", 50), ("C", 100), ("D", 500), ("M", 1000),
+])
+def test_should_understand_one_char_numbers(numeral, expected):
+    assert convert(numeral) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="查找表 + 参数化测试"><pre>
+const TABLE: Record&lt;string, number&gt; = {                        // 符号 → 数值
+  I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000,
+};
+
+export function convert(numeral: string): number {
+  return TABLE[numeral];
+}
+
+// ---- roman.test.ts ----
+test.each([
+  ["I", 1], ["V", 5], ["X", 10], ["L", 50], ["C", 100], ["D", 500], ["M", 1000],
+])("should understand one-char number %s", (numeral, expected) =&gt; {
+  expect(convert(numeral)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 测试和生产代码有点重复</div>
+  <p>测试的输入输出几乎就是生产代码里那张表。用例子做测试时这很常见，写到更复杂的测试时会缓解。</p>
+</div>
+
+<h3>第 4 圈：多个字符（II → 2）</h3>
+
+<p>让测试通过的最简单办法是往表里加一行 <code>"II" → 2</code>……但那样就得把 III、IV 等所有组合都加进去，显然不是好主意。该再次推广了：<strong>遍历每个符号，累加数值</strong>。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="遍历每个字符并累加"><pre>
+public class RomanNumeralConverter {
+  private static Map&lt;Character, Integer&gt; table = new HashMap&lt;&gt;() {{   // 键从 String 改成 Character
+    put('I', 1);
+    put('V', 5);
+    put('X', 10);
+    put('L', 50);
+    put('C', 100);
+    put('D', 500);
+    put('M', 1000);
+  }};
+
+  public int convert(String numberInRoman) {
+    int finalNumber = 0;                             // 累加器
+    for (int i = 0; i &lt; numberInRoman.length(); i++) {
+      finalNumber += table.get(numberInRoman.charAt(i));
+    }
+    return finalNumber;
+  }
+}
+
+@ParameterizedTest
+@CsvSource({"II,2", "III,3", "VI, 6", "XVIII, 18", "XXIII, 23", "DCCLXVI, 766"})
+void shouldUnderstandMultipleCharNumbers(String romanNumeral, int expectedNumberAfterConversion) {
+  RomanNumeralConverter roman = new RomanNumeralConverter();
+  int convertedNumber = roman.convert(romanNumeral);
+  assertThat(convertedNumber).isEqualTo(expectedNumberAfterConversion);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="遍历每个字符并累加"><pre>
+def convert(numeral: str) -&gt; int:
+    final_number = 0                                 # 累加器
+    for symbol in numeral:
+        final_number += TABLE[symbol]
+    return final_number
+
+@pytest.mark.parametrize("numeral, expected", [
+    ("II", 2), ("III", 3), ("VI", 6), ("XVIII", 18), ("XXIII", 23), ("DCCLXVI", 766),
+])
+def test_should_understand_multiple_char_numbers(numeral, expected):
+    assert convert(numeral) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="遍历每个字符并累加"><pre>
+export function convert(numeral: string): number {
+  let finalNumber = 0;                               // 累加器
+  for (const symbol of numeral) {
+    finalNumber += TABLE[symbol];
+  }
+  return finalNumber;
+}
+
+test.each([
+  ["II", 2], ["III", 3], ["VI", 6], ["XVIII", 18], ["XXIII", 23], ["DCCLXVI", 766],
+])("should understand multiple-char number %s", (numeral, expected) =&gt; {
+  expect(convert(numeral)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<p>
+  三个测试依然全绿。要意识到：这一圈我们只关注「多字符」，<strong>根本没去想前面的例子</strong>。这正是有测试的一大好处：每一步都是稳的，任何破坏已有行为的改动（回归 Bug）都会被测试抓住。
+  这里的例子是随手挑的 —— 目标不是系统化，只是给开发提供一张安全网。完成后我们再做系统化测试。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 一个测试方法还是多个？</div>
+  <p>也可以把所有输入合并进一个参数化测试（仓库里的 <code>convertRomanNumerals</code> 就是这样）。这是个人和团队的品味问题，本章保持分开。</p>
+</div>
+
+<h3>第 5 圈：减法规则（IV → 4）</h3>
+
+<p>这次一口气加多个例子 —— 我们已经理解了问题，可以迈大一步；如果出了问题，再退回来。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="红：减法规则的测试"><pre>
+@ParameterizedTest
+@CsvSource({"IV,4", "XIV,14", "XL, 40", "XLI,41", "CCXCIV, 294"})
+void shouldUnderstandSubtractiveNotation(String romanNumeral, int expectedNumberAfterConversion) {
+  RomanNumeralConverter roman = new RomanNumeralConverter();
+  int convertedNumber = roman.convert(romanNumeral);
+  assertThat(convertedNumber).isEqualTo(expectedNumberAfterConversion);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="红：减法规则的测试"><pre>
+@pytest.mark.parametrize("numeral, expected", [
+    ("IV", 4), ("XIV", 14), ("XL", 40), ("XLI", 41), ("CCXCIV", 294),
+])
+def test_should_understand_subtractive_notation(numeral, expected):
+    assert convert(numeral) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="红：减法规则的测试"><pre>
+test.each([
+  ["IV", 4], ["XIV", 14], ["XL", 40], ["XLI", 41], ["CCXCIV", 294],
+])("should understand subtractive notation %s", (numeral, expected) =&gt; {
+  expect(convert(numeral)).toBe(expected);
+});
+</pre></div>
+</div>
+
+<p>
+  这部分算法需要多想一想。从右往左看，罗马数字的符号值是递增的；但当一个符号<strong>比它右边的邻居小</strong>时，要减掉而不是加上。
+  技巧：用一个 <code>multiplier</code>，当前符号比上一个看过的邻居小时，它就变成 -1：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="从右往左逐个处理 CCXCIV：比右邻居小就减，否则就加，最终得到 294">
+  <text class="ttl" x="20" y="24">从右往左处理 "CCXCIV"</text>
+  <g>
+    <rect class="bx" x="120" y="40" width="70" height="44" rx="6"/><text class="ttl" x="155" y="68" text-anchor="middle">C</text>
+    <rect class="bx" x="200" y="40" width="70" height="44" rx="6"/><text class="ttl" x="235" y="68" text-anchor="middle">C</text>
+    <rect class="bx-r" x="280" y="40" width="70" height="44" rx="6"/><text class="ttl on-r" x="315" y="68" text-anchor="middle">X</text>
+    <rect class="bx" x="360" y="40" width="70" height="44" rx="6"/><text class="ttl" x="395" y="68" text-anchor="middle">C</text>
+    <rect class="bx-r" x="440" y="40" width="70" height="44" rx="6"/><text class="ttl on-r" x="475" y="68" text-anchor="middle">I</text>
+    <rect class="bx" x="520" y="40" width="70" height="44" rx="6"/><text class="ttl" x="555" y="68" text-anchor="middle">V</text>
+  </g>
+  <path class="ln-a" d="M600 100 H110" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="610" y="104">方向</text>
+
+  <text class="sm" x="20" y="134">当前值</text>
+  <text class="mono" x="155" y="134" text-anchor="middle">100</text><text class="mono" x="235" y="134" text-anchor="middle">100</text>
+  <text class="mono" x="315" y="134" text-anchor="middle">10</text><text class="mono" x="395" y="134" text-anchor="middle">100</text>
+  <text class="mono" x="475" y="134" text-anchor="middle">1</text><text class="mono" x="555" y="134" text-anchor="middle">5</text>
+  <text class="sm" x="20" y="160">右邻居</text>
+  <text class="mono" x="155" y="160" text-anchor="middle">100</text><text class="mono" x="235" y="160" text-anchor="middle">10</text>
+  <text class="mono" x="315" y="160" text-anchor="middle">100</text><text class="mono" x="395" y="160" text-anchor="middle">1</text>
+  <text class="mono" x="475" y="160" text-anchor="middle">5</text><text class="mono" x="555" y="160" text-anchor="middle">0</text>
+  <text class="sm" x="20" y="186">贡献</text>
+  <text class="mono on-g" x="155" y="186" text-anchor="middle">+100</text><text class="mono on-g" x="235" y="186" text-anchor="middle">+100</text>
+  <text class="mono on-r" x="315" y="186" text-anchor="middle">−10</text><text class="mono on-g" x="395" y="186" text-anchor="middle">+100</text>
+  <text class="mono on-r" x="475" y="186" text-anchor="middle">−1</text><text class="mono on-g" x="555" y="186" text-anchor="middle">+5</text>
+  <text class="sm" x="20" y="212">累计</text>
+  <text class="mono" x="155" y="212" text-anchor="middle">294</text><text class="mono" x="235" y="212" text-anchor="middle">194</text>
+  <text class="mono" x="315" y="212" text-anchor="middle">94</text><text class="mono" x="395" y="212" text-anchor="middle">104</text>
+  <text class="mono" x="475" y="212" text-anchor="middle">4</text><text class="mono" x="555" y="212" text-anchor="middle">5</text>
+  <text class="lbl" x="620" y="160">比右邻居小</text>
+  <text class="lbl" x="620" y="178">→ 乘以 −1</text>
+  <text class="ttl on-a" x="620" y="212">= 294 ✔</text>
+</svg>
+<figcaption>图 8-3　减法规则的算法：从右往左，比右邻居小就减</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="绿：支持减法规则"><pre>
+public int convert(String numberInRoman) {
+  int finalNumber = 0;
+  int lastNeighbor = 0;                                   // 上一个看过的数字（右邻居）
+  for (int i = numberInRoman.length() - 1; i &gt;= 0; i--) { // 从右往左
+    int current = table.get(numberInRoman.charAt(i));
+
+    int multiplier = 1;
+    if (current &lt; lastNeighbor) multiplier = -1;          // 比右邻居小 → 变成负数
+
+    finalNumber += table.get(numberInRoman.charAt(i)) * multiplier;
+    lastNeighbor = current;
+  }
+  return finalNumber;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="绿：支持减法规则"><pre>
+def convert(numeral: str) -&gt; int:
+    final_number = 0
+    last_neighbor = 0                                     # 上一个看过的数字（右邻居）
+    for symbol in reversed(numeral):                      # 从右往左
+        current = TABLE[symbol]
+
+        multiplier = 1
+        if current &lt; last_neighbor:                       # 比右邻居小 → 变成负数
+            multiplier = -1
+
+        final_number += TABLE[symbol] * multiplier
+        last_neighbor = current
+    return final_number
+</pre></div>
+<div class="code" data-lang="ts" data-file="绿：支持减法规则"><pre>
+export function convert(numeral: string): number {
+  let finalNumber = 0;
+  let lastNeighbor = 0;                                   // 上一个看过的数字（右邻居）
+  for (let i = numeral.length - 1; i &gt;= 0; i--) {         // 从右往左
+    const current = TABLE[numeral[i]];
+
+    let multiplier = 1;
+    if (current &lt; lastNeighbor) multiplier = -1;          // 比右邻居小 → 变成负数
+
+    finalNumber += TABLE[numeral[i]] * multiplier;
+    lastNeighbor = current;
+  }
+  return finalNumber;
+}
+</pre></div>
+</div>
+
+<h3>第 6 圈：重构</h3>
+
+<p>测试全绿。有什么可以改进的吗？累加时又查了一次 <code>table.get(...)</code>，可这个值已经存在 <code>current</code> 里了；再引入一个变量表示「乘以 ±1 之后的当前数字」，算法会更好懂。重构，然后<strong>再跑一遍测试</strong>：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch8/RomanNumeralConverter.java（重构后）"><pre>
+public int convert(String numberInRoman) {
+  int finalNumber = 0;
+  int lastNeighbor = 0;
+  for (int i = numberInRoman.length() - 1; i &gt;= 0; i--) {
+    int current = table.get(numberInRoman.charAt(i));
+
+    int multiplier = 1;
+    if (current &lt; lastNeighbor) multiplier = -1;
+
+    int currentNumeralToBeAdded = current * multiplier;   // 复用 current，并给结果起个名字
+    finalNumber += currentNumeralToBeAdded;
+
+    lastNeighbor = current;
+  }
+  return finalNumber;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="roman.py（重构后）"><pre>
+TABLE = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+
+def convert(numeral: str) -&gt; int:
+    final_number = 0
+    last_neighbor = 0
+    for symbol in reversed(numeral):
+        current = TABLE[symbol]
+        multiplier = -1 if current &lt; last_neighbor else 1
+        current_numeral_to_be_added = current * multiplier   # 复用 current，并给结果起个名字
+        final_number += current_numeral_to_be_added
+        last_neighbor = current
+    return final_number
+</pre></div>
+<div class="code" data-lang="ts" data-file="roman.ts（重构后）"><pre>
+const TABLE: Record&lt;string, number&gt; = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+
+export function convert(numeral: string): number {
+  let finalNumber = 0;
+  let lastNeighbor = 0;
+  for (let i = numeral.length - 1; i &gt;= 0; i--) {
+    const current = TABLE[numeral[i]];
+    const multiplier = current &lt; lastNeighbor ? -1 : 1;
+    const currentNumeralToBeAdded = current * multiplier;   // 复用 current，并给结果起个名字
+    finalNumber += currentNumeralToBeAdded;
+    lastNeighbor = current;
+  }
+  return finalNumber;
+}
+</pre></div>
+</div>
+
+<p>清单上的例子都实现了。接下来可以想更多情况：比如程序还没有拒绝非法数字 <code>"VXL"</code>、<code>"ILV"</code>。有了新例子，就重复整个过程，直到程序全部完成 —— 留作练习。</p>
+
+<h2 id="benefits">TDD 带来了什么</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128203;</span><h4>先看需求</h4><p>TDD 里的测试基本就是<strong>可执行的需求</strong>。每写一个，都在思考程序该做什么、不该做什么。这让你只写解决问题所需的代码，也常常促使你回头找需求方问清楚没写明的情况。</p></div>
+  <div class="card"><span class="ic">&#127899;</span><h4>完全掌控节奏</h4><p>对问题有把握，就迈大步，写一个涵盖复杂情况的测试；没把握，就拆成更小的部分，先为简单的写测试。</p></div>
+  <div class="card"><span class="ic">&#9889;</span><h4>快速反馈</h4><p>不做 TDD 的开发者往往写了一大块代码才得到反馈。TDD 逼你一次走一步，每一步都停下来反思；距离上次一切尽在掌握只写了一点点代码，新问题很容易定位。</p></div>
+  <div class="card"><span class="ic">&#129514;</span><h4>代码天生可测</h4><p>先写测试，逼你从一开始就思考怎么（轻松地）测试生产代码。传统流程里，到后期才考虑测试，那时再改代码结构可能很贵。</p></div>
+  <div class="card"><span class="ic">&#127912;</span><h4>设计反馈</h4><p>测试代码往往是被开发类的<strong>第一个客户</strong>。如果实例化它、调用它、断言它很难，也许有更好的设计。TDD 让这些问题更早暴露，越早修越便宜。</p></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; TDD 在复杂问题上最能显示优势</div>
+  <p>罗马数字只是个小例子。推荐看 James Shore 在 YouTube 上用 TDD 开发整个系统的系列视频（2014），以及 Freeman 和 Pryce 的《测试驱动的面向对象软件开发》（2009），他们也用 TDD 构建了整个系统，并深入讨论了如何用测试指导设计决策。</p>
+</div>
+
+<h2 id="real-world">现实中的 TDD</h2>
+
+<p>有人热爱 TDD 并激烈捍卫它，有人建议别用。软件工程实践从来不是银弹。下面的观点是作者个人的，并非基于科学证据。看 TDD 适不适合你，最好的办法就是试一试。</p>
+
+<h3>用还是不用？</h3>
+<p>
+  怀疑的读者可能会想：「不用 TDD 我也能得到这些好处。我可以多想想需求，只写需要的代码，从一开始就考虑可测试性。」没错。
+  但作者喜欢 TDD，是因为它给了他一种<strong>节奏</strong>：找到下一个最简单的功能，为它写测试，只实现所需的部分，反思刚才做了什么 —— 他完全掌控这个节奏，避免陷入困惑和沮丧的无限循环。
+  测试一变绿，就是一个天然的反思时刻。而且 TDD 逼他从一开始就<em>使用</em>正在开发的代码：设计时对一个类的感觉，和真正使用它时的感觉往往不同，两者结合才能做出最好的建模决定。
+</p>
+<p>如果你先写代码后写测试，关键是让两者之间的时间足够短，才能及时得到反馈。<strong>不要写一整天代码，然后才开始测试 —— 那可能太晚了。</strong></p>
+
+<h3>100% 的时间都用 TDD？</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="何时用 TDD：需要学习时用，没有什么可学时不必用">
+  <rect class="bx-g" x="20" y="20" width="350" height="140" rx="12"/>
+  <text class="ttl on-g" x="195" y="46" text-anchor="middle">✔ 作者会用 TDD</text>
+  <text class="lbl" x="40" y="76">• 不清楚该怎么设计、架构、实现一个需求</text>
+  <text class="lbl" x="40" y="100">• 问题复杂，或自己缺乏解决它的经验</text>
+  <text class="lbl" x="40" y="124">• 想慢下来，用测试试验不同的可能性</text>
+  <text class="sm" x="195" y="148" text-anchor="middle">一句话：还有东西要学</text>
+  <rect class="bx" x="390" y="20" width="350" height="140" rx="12"/>
+  <text class="ttl" x="565" y="46" text-anchor="middle">— 作者不用 TDD</text>
+  <text class="lbl" x="410" y="76">• 对问题很熟，已经知道最好的解法</text>
+  <text class="lbl" x="410" y="100">• 功能太复杂，连第一个测试长什么样都难定</text>
+  <text class="lbl" x="410" y="124">• 但<strong>仍然及时写测试</strong>：先写代码，紧接着写测试</text>
+  <text class="sm" x="565" y="148" text-anchor="middle">一句话：这个过程里没什么可学的</text>
+</svg>
+<figcaption>图 8-4　作者务实的回答：「不」</figcaption>
+</figure>
+
+<p>TDD 为作者创造了学习的机会：从实现角度（它做了该做的吗？）和设计角度（结构是我想要的吗？）。我们需要停下来思考的方式，TDD 是完美的方式之一，但不是唯一的。什么时候用 TDD，需要经验来判断。</p>
+
+<h3>TDD 适用于所有类型的应用吗？</h3>
+<p>大多数都适用，甚至有专门讲嵌入式系统 TDD 的书，比如 Grenning 的《Test Driven Development for Embedded C》（2011）。<strong>只要你能为应用写自动化测试，就能做 TDD。</strong></p>
+
+<h3>研究怎么说？</h3>
+
+<p>很多人把 TDD 当银弹，所以作者认为你应该知道：实践者怎么想、他怎么想，以及研究目前知道什么。</p>
+
+<div class="tw">
+<table>
+  <tr><th>研究</th><th>发现</th><th></th></tr>
+  <tr><td>Janzen（2005）</td><td>TDD 实践者写出的算法更简单，测试集覆盖更多</td><td class="ok">正面</td></tr>
+  <tr><td>Janzen 和 Saiedian（2006）</td><td>TDD 代码更好地运用了面向对象概念，职责分布更合理；其他团队的代码更「过程式」</td><td class="ok">正面</td></tr>
+  <tr><td>George 和 Williams（2003）</td><td>TDD 起初可能降低新手的生产力，但 92% 的开发者认为它提高了代码质量</td><td class="ok">正面</td></tr>
+  <tr><td>Dogša 和 Batič（2011）</td><td>类设计有所改善，源于 TDD 为过程带来的简洁性</td><td class="ok">正面</td></tr>
+  <tr><td>Erdogmus 等（2005）</td><td>24 名本科生的实验：生产力提高，但代码质量没变</td><td>混合</td></tr>
+  <tr><td>Nagappan 等（2008）</td><td>微软的三个案例研究：采用 TDD 的项目发布前缺陷密度降低 40%–90%</td><td class="ok">正面</td></tr>
+  <tr><td>Müller 和 Hagner（2002）</td><td>19 名学生：测试先行没有加快实现，代码也没有更可靠</td><td class="bad">不明确</td></tr>
+  <tr><td>Siniaalto 和 Abrahamsson（2007）</td><td>对比 5 个小项目的代码指标，好处不明显</td><td class="bad">不明确</td></tr>
+  <tr><td>Shull 等（2010）</td><td>综述 14 篇论文：TDD 对内部代码质量没有一致的影响（这篇易读，推荐）</td><td class="bad">不明确</td></tr>
+  <tr><td>Fucci 等（2016）</td><td>重要的是<strong>写测试</strong>（先写后写都行），以及 TDD 鼓励的细粒度、稳定的小步</td><td>新视角</td></tr>
+</table>
+</div>
+
+<p>
+  作者作为读过这个主题大部分论文的学者认为：这些研究，无论结论正面与否，都不完美 —— 有的用学生（不是软件开发或 TDD 专家），有的用玩具项目（TDD 没有发挥空间），有的用耦合、内聚等只能部分衡量代码质量的指标。
+  设计实验来衡量一项软件工程实践的收益本身就很难。
+</p>
+<p>
+  更新的研究认为，TDD 的效果可能不是来自「先写测试」，而是来自<strong>朝最终目标迈出的小步</strong>。Fucci 等人写道：「TDD 所声称的好处也许并非源于其独特的测试先行，而是源于类 TDD 过程所鼓励的细粒度、稳定的步伐，它们改善了专注度和心流。」
+  Michael Feathers（2008）也说：「这就是魔力所在，也是单元测试之所以有效的原因。当你写单元测试时，无论是 TDD 风格还是开发之后，你都在审视、在思考，常常在遇到测试失败之前就预防了问题。」
+</p>
+
+<div class="box key">
+  <div class="t">&#128273; 给 TDD 一个机会</div>
+  <p>看它是否适合你的工作方式和编程风格。你也许会全职采用（像作者的很多同事），也许只在某些情况下用（像作者），也许决定永远不用（也像很多同事）。由你决定。</p>
+</div>
+
+<h3>TDD 的流派</h3>
+
+<p>TDD 没规定从哪儿开始、写什么测试，这种灵活性催生了不同流派：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="经典派从内向外，伦敦派从外向内">
+  <text class="ttl" x="190" y="22" text-anchor="middle">经典派（Detroit / 由内而外）</text>
+  <circle cx="190" cy="140" r="100" style="fill:var(--panel-2);stroke:var(--line-2);stroke-width:1.5"/>
+  <circle cx="190" cy="140" r="64" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <circle cx="190" cy="140" r="28" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:1.5"/>
+  <text class="sm on-a" x="190" y="144" text-anchor="middle">实体</text>
+  <text class="sm on-b" x="190" y="100" text-anchor="middle">业务规则</text>
+  <text class="sm" x="190" y="56" text-anchor="middle">控制器 / UI</text>
+  <path class="ln-a" d="M210 150 L270 210" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="276" y="224">从这里开始 →</text>
+  <text class="sm" x="190" y="262" text-anchor="middle">尽量不用 Mock，把几个类放一起测</text>
+
+  <text class="ttl" x="570" y="22" text-anchor="middle">伦敦派（London / 由外而内 / Mock 派）</text>
+  <circle cx="570" cy="140" r="100" style="fill:var(--panel-2);stroke:var(--line-2);stroke-width:1.5"/>
+  <circle cx="570" cy="140" r="64" style="fill:var(--blue-bg);stroke:var(--blue);stroke-width:1.5"/>
+  <circle cx="570" cy="140" r="28" style="fill:var(--accent-bg);stroke:var(--accent);stroke-width:1.5"/>
+  <text class="sm on-a" x="570" y="144" text-anchor="middle">实体</text>
+  <text class="sm on-b" x="570" y="100" text-anchor="middle">业务规则</text>
+  <text class="sm" x="570" y="56" text-anchor="middle">控制器 / UI</text>
+  <path class="ln-a" d="M690 60 L620 100" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="690" y="52">从这里开始</text>
+  <text class="sm" x="570" y="262" text-anchor="middle">用 Mock 探索对象如何协作，偏爱隔离的单元</text>
+</svg>
+<figcaption>图 8-5　两种 TDD 流派：从哪一层开始，以及怎么对待 Mock</figcaption>
+</figure>
+
+<div class="vs">
+  <div class="old"><div class="h">经典派（Detroit 派、由内而外）</div>
+    <div style="padding:10px 14px">从组成功能的各个单元开始，通常先写承载主要业务规则的实体，再慢慢向外，连接控制器、UI、Web 服务。<strong>尽量避免 Mock</strong>：一条业务规则涉及两三个类时，把它们放在一起测。理由正是第 6 章讲的：Mock 降低测试的有效性，让测试更脆弱。</div></div>
+  <div class="new"><div class="h">伦敦派（London 派、由外而内、Mock 派）</div>
+    <div style="padding:10px 14px">从外部（UI 或处理 Web 服务的控制器）开始，再慢慢走向处理功能的单元。关注不同对象如何<strong>协作</strong>，用 Mock 探索这种协作，偏爱测试隔离的单元。</div></div>
+</div>
+
+<p>
+  两派都用测试代码来了解正在开发的代码的设计。Test Double（2018）总结得好：「在 Detroit 派看来，一个对象难测，就说明它难用；在 London 派看来，一个依赖难 Mock，就说明使用它的对象用起来难。」
+  作者的风格是<strong>两者的混合</strong>：从内部开始写实体和业务规则，再慢慢向外，让外层调用这些实体；但他尽量做单元测试，不喜欢单元 A 的测试因为单元 B 的 Bug 而失败，所以会用 Mock，并遵循第 6 章的所有实践。推荐 Mancuso 2018 年的演讲。
+</p>
+
+<h3>TDD 与真正的测试</h3>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 160" role="img" aria-label="TDD 属于用测试引导开发，完成后要切换到系统化测试，TDD 的测试可以复用">
+  <rect class="bx-a" x="20" y="30" width="300" height="90" rx="12"/>
+  <text class="ttl on-a" x="170" y="58" text-anchor="middle">TDD：用测试引导开发</text>
+  <text class="sm" x="170" y="80" text-anchor="middle">关注点是开发，不是测试</text>
+  <text class="sm" x="170" y="98" text-anchor="middle">例子是随手挑的</text>
+  <path class="ln" d="M322 75 H436" marker-end="url(#ar)"/>
+  <text class="sm" x="379" y="66" text-anchor="middle">代码看起来不错了</text>
+  <text class="sm" x="379" y="92" text-anchor="middle">测试可复用</text>
+  <rect class="bx-b" x="440" y="30" width="300" height="90" rx="12"/>
+  <text class="ttl on-b" x="590" y="58" text-anchor="middle">切换焦点：系统化测试</text>
+  <text class="sm" x="590" y="80" text-anchor="middle">规格测试、结构化测试、</text>
+  <text class="sm" x="590" y="98" text-anchor="middle">属性测试……</text>
+  <text class="sm" x="380" y="148" text-anchor="middle">两者都要及时：短的 TDD 循环和短的系统化测试循环可以交替进行</text>
+</svg>
+<figcaption>图 8-6　TDD 是帮你开发的工具，不是帮你测试的工具</figcaption>
+</figure>
+
+<p>
+  有研究表明 TDD 实践者写的测试更多。但作者不认为 TDD 产生的测试集能和前几章系统化设计出的强大测试集相比 —— 理由很简单：<strong>做 TDD 时，我们关注的不是测试</strong>。
+  TDD 结束、代码看起来不错之后，就该开始有效而系统的测试了：把焦点转到测试上，应用规格测试、结构化测试和属性测试。TDD 时写的测试当然可以复用，这很自然。
+  两者都要及时：你不会想 TDD 完一个功能，一周后才正经测它。掌握所有技术之后，你会开始自如地组合它们 —— 本书的实践不是线性的流程，而是随时可用的工具。
+</p>
+
+<div class="box tip">
+  <div class="t">&#128161; 回头系统地测一下罗马数字转换器</div>
+  <p>用第 2 章的方法想想：空字符串、小写字母、非法符号（"A"）、非法组合（"IIII"、"VX"、"IL"）、最大值（"MMMCMXCIX" = 3999）……当前实现对它们的行为是什么？该是什么？这些就是 TDD 之后「真正的测试」要回答的问题。</p>
+</div>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>写一个失败的测试、让它通过、然后重构 —— 这就是测试驱动开发。</li>
+  <li>红—绿—重构循环为编码过程带来了好处，比如对开发节奏的更多掌控，以及快速反馈。</li>
+  <li>各个 TDD 流派都有道理，应视情况使用。</li>
+  <li>实证研究没有发现 TDD 的明确收益。目前的共识是：小步推进一个功能、稳定地前进，能让开发者更高效。所以 TDD 是品味问题，但短的实现循环加测试是正确的方向。</li>
+  <li>是否 100% 使用 TDD 也是个人选择，你应该找出 TDD 让你更高效的场景。</li>
+  <li>小步是 TDD 的关键。拿不准下一步时，别怕走慢；有信心时，也别怕走快！</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>8.1　填空：TDD 循环的五个编号位置分别是什么？</summary>
+<p>参见图 8-1：写一个（简单的）测试 →（测试失败）→ 让它通过 →（测试通过）→ 重构 → 回到写下一个测试。</p></details>
+
+<details class="quiz"><summary>8.2　以下哪项是做 TDD <em>最不重要</em>的理由？（A 把测试代码的反馈当作设计提示　B 让开发者在开发功能的过程中稳定、渐进地前进　C 实践 TDD 的结果是软件系统被完整地测试　D 使用 Mock 帮助开发者理解对象之间的关系）</summary>
+<p><strong>C</strong>。虽然一些研究表明 TDD 实践者写的测试往往更多，但这不是人们使用 TDD 的主要原因 —— 而且 TDD 并不会让系统被「完整地」测试。</p></details>
+
+<details class="quiz"><summary>8.3　从开发者的角度，以下哪项<em>不</em>被认为是 TDD 的好处？（A 小步前进　B 更好的团队融合：写测试是社交活动　C 重构：循环促使开发者不断改进代码　D 为可测试性设计）</summary>
+<p><strong>B</strong>。</p></details>
+
+<details class="quiz"><summary>8.4　用 TDD 实现保龄球计分（点开看一个参考的 TDD 过程和实现）</summary>
+<p>规则：一局 10 格，每格最多两投、共 10 个瓶。<strong>全中（strike）</strong>：一投全倒，本格得 10 分 + 接下来两投的分数；<strong>补中（spare）</strong>：两投全倒，本格得 10 分 + 接下来一投的分数。第 10 格打出全中或补中时，可以追加 1 或 2 投，但这一格总共不超过 3 投。</p>
+<p>没有标准答案，下面是一种经典的 TDD 路线（Robert Martin 的「保龄球套路」）：先测「全部落空」得 0 分 → 「每投 1 瓶」得 20 分 → 一个补中 → 一个全中 → 完美比赛 300 分。每一步只写刚好够的代码，然后重构。</p>
+<div class="langs">
+<div class="code" data-lang="java" data-file="BowlingGameTest.java + BowlingGame.java"><pre>
+class BowlingGameTest {
+  private final BowlingGame game = new BowlingGame();
+
+  private void rollMany(int n, int pins) {
+    for (int i = 0; i &lt; n; i++) game.roll(pins);
+  }
+
+  @Test void gutterGame()   { rollMany(20, 0); assertThat(game.score()).isEqualTo(0); }
+  @Test void allOnes()      { rollMany(20, 1); assertThat(game.score()).isEqualTo(20); }
+  @Test void oneSpare()     { game.roll(4); game.roll(6); game.roll(3); rollMany(17, 0);
+                              assertThat(game.score()).isEqualTo(16); }     // (10+3) + 3
+  @Test void oneStrike()    { game.roll(10); game.roll(1); game.roll(2); rollMany(16, 0);
+                              assertThat(game.score()).isEqualTo(16); }     // (10+1+2) + 3
+  @Test void perfectGame()  { rollMany(12, 10); assertThat(game.score()).isEqualTo(300); }
+}
+
+class BowlingGame {
+  private final List&lt;Integer&gt; rolls = new ArrayList&lt;&gt;();
+
+  public void roll(int pins) { rolls.add(pins); }
+
+  public int score() {
+    int score = 0, i = 0;
+    for (int frame = 0; frame &lt; 10; frame++) {
+      if (rolls.get(i) == 10) {                                   // 全中
+        score += 10 + rolls.get(i + 1) + rolls.get(i + 2);
+        i += 1;
+      } else if (rolls.get(i) + rolls.get(i + 1) == 10) {         // 补中
+        score += 10 + rolls.get(i + 2);
+        i += 2;
+      } else {
+        score += rolls.get(i) + rolls.get(i + 1);
+        i += 2;
+      }
+    }
+    return score;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_bowling.py + bowling.py"><pre>
+import pytest
+
+class BowlingGame:
+    def __init__(self):
+        self._rolls: list[int] = []
+
+    def roll(self, pins: int) -&gt; None:
+        self._rolls.append(pins)
+
+    def score(self) -&gt; int:
+        r, score, i = self._rolls, 0, 0
+        for _ in range(10):
+            if r[i] == 10:                        # 全中
+                score += 10 + r[i + 1] + r[i + 2]
+                i += 1
+            elif r[i] + r[i + 1] == 10:           # 补中
+                score += 10 + r[i + 2]
+                i += 2
+            else:
+                score += r[i] + r[i + 1]
+                i += 2
+        return score
+
+@pytest.fixture
+def game():
+    return BowlingGame()
+
+def roll_many(game, n, pins):
+    for _ in range(n):
+        game.roll(pins)
+
+def test_gutter_game(game):
+    roll_many(game, 20, 0)
+    assert game.score() == 0
+
+def test_all_ones(game):
+    roll_many(game, 20, 1)
+    assert game.score() == 20
+
+def test_one_spare(game):
+    game.roll(4); game.roll(6); game.roll(3)
+    roll_many(game, 17, 0)
+    assert game.score() == 16                     # (10+3) + 3
+
+def test_one_strike(game):
+    game.roll(10); game.roll(1); game.roll(2)
+    roll_many(game, 16, 0)
+    assert game.score() == 16                     # (10+1+2) + 3
+
+def test_perfect_game(game):
+    roll_many(game, 12, 10)
+    assert game.score() == 300
+</pre></div>
+<div class="code" data-lang="ts" data-file="bowling.test.ts + bowling.ts"><pre>
+import { beforeEach, test, expect } from "vitest";
+
+export class BowlingGame {
+  private rolls: number[] = [];
+
+  roll(pins: number): void {
+    this.rolls.push(pins);
+  }
+
+  score(): number {
+    const r = this.rolls;
+    let score = 0, i = 0;
+    for (let frame = 0; frame &lt; 10; frame++) {
+      if (r[i] === 10) {                          // 全中
+        score += 10 + r[i + 1] + r[i + 2];
+        i += 1;
+      } else if (r[i] + r[i + 1] === 10) {        // 补中
+        score += 10 + r[i + 2];
+        i += 2;
+      } else {
+        score += r[i] + r[i + 1];
+        i += 2;
+      }
+    }
+    return score;
+  }
+}
+
+let game: BowlingGame;
+beforeEach(() =&gt; { game = new BowlingGame(); });
+const rollMany = (n: number, pins: number) =&gt; { for (let i = 0; i &lt; n; i++) game.roll(pins); };
+
+test("gutter game", () =&gt; { rollMany(20, 0); expect(game.score()).toBe(0); });
+test("all ones", () =&gt; { rollMany(20, 1); expect(game.score()).toBe(20); });
+test("one spare", () =&gt; {
+  game.roll(4); game.roll(6); game.roll(3); rollMany(17, 0);
+  expect(game.score()).toBe(16);                  // (10+3) + 3
+});
+test("one strike", () =&gt; {
+  game.roll(10); game.roll(1); game.roll(2); rollMany(16, 0);
+  expect(game.score()).toBe(16);                  // (10+1+2) + 3
+});
+test("perfect game", () =&gt; { rollMany(12, 10); expect(game.score()).toBe(300); });
+</pre></div>
+</div>
+<p>完成后别忘了切换到测试模式：非法输入（负数、单格超过 10 瓶、投的次数不对）该怎么处理？第 10 格的各种组合都测到了吗？</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch8</code> 目录跑 <code>mvn test</code>。然后删掉 <code>RomanNumeralConverter</code> 的实现，只留骨架，用自己的语言从头 TDD 一遍（不看本页）。</li>
+    <li>继续书中留的练习：让转换器拒绝非法数字（"VXL"、"ILV"、"IIII"……）。先写失败的测试，再实现。</li>
+    <li>试试反向：TDD 一个「整数 → 罗马数字」的转换器。然后用第 5 章的属性测试检验一条漂亮的属性：<code>toArabic(toRoman(n)) == n</code>，对所有 1 ≤ n ≤ 3999 成立。</li>
+    <li>自测练习 8.4：自己用 TDD 实现保龄球计分，再和上面的参考实现比较。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

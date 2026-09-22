@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 11 章 · 全书总结 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="11">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 11 章</span>
+<h1>全书总结</h1>
+<p class="lede">
+  到这里，你已经学完了作者多年来赖以工作的所有测试技术。最后一章不再引入新技术，而是说几句关于「现实中的有效测试」的心里话，
+  强调几件应该始终放在心上的事，并给出一张三种语言的工具速查表，方便你带着走。
+</p>
+
+<div id="chapter-toc"></div>
+
+<h2 id="iterate">模型看起来是线性的，但迭代才是根本</h2>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="全书技术地图，箭头表示在各种技术之间来回迭代">
+  <rect class="bx-d" x="14" y="14" width="330" height="302" rx="14"/>
+  <text class="ttl" x="30" y="40">用测试引导开发</text>
+  <rect class="bx" x="34" y="56" width="130" height="40" rx="8"/><text class="lbl" x="99" y="81" text-anchor="middle">需求分析</text>
+  <rect class="bx-a" x="198" y="56" width="130" height="40" rx="8"/><text class="lbl on-a" x="263" y="76" text-anchor="middle">TDD</text><text class="sm" x="263" y="90" text-anchor="middle">第 8 章</text>
+  <rect class="bx-a" x="34" y="116" width="130" height="50" rx="8"/><text class="lbl on-a" x="99" y="138" text-anchor="middle">可测试性设计</text><text class="sm" x="99" y="156" text-anchor="middle">第 7 章</text>
+  <rect class="bx-a" x="198" y="116" width="130" height="50" rx="8"/><text class="lbl on-a" x="263" y="138" text-anchor="middle">契约式设计</text><text class="sm" x="263" y="156" text-anchor="middle">第 4 章</text>
+  <rect class="bx-p" x="34" y="190" width="294" height="50" rx="8"/><text class="lbl on-p" x="181" y="212" text-anchor="middle">自动化测试套件 · 测试代码质量</text><text class="sm" x="181" y="230" text-anchor="middle">第 10 章</text>
+  <rect class="bx" x="34" y="258" width="294" height="44" rx="8"/><text class="lbl" x="181" y="278" text-anchor="middle">Mock / Stub / Fake</text><text class="sm" x="181" y="294" text-anchor="middle">第 6 章</text>
+
+  <rect class="bx-d" x="414" y="14" width="332" height="302" rx="14"/>
+  <text class="ttl" x="430" y="40">高效而系统地测试</text>
+  <rect class="bx-b" x="430" y="56" width="96" height="50" rx="8"/><text class="lbl on-b" x="478" y="78" text-anchor="middle">规格测试</text><text class="sm" x="478" y="96" text-anchor="middle">第 2 章</text>
+  <rect class="bx-b" x="534" y="56" width="96" height="50" rx="8"/><text class="lbl on-b" x="582" y="78" text-anchor="middle">边界测试</text><text class="sm" x="582" y="96" text-anchor="middle">第 2 章</text>
+  <rect class="bx-b" x="638" y="56" width="96" height="50" rx="8"/><text class="lbl on-b" x="686" y="78" text-anchor="middle">结构化测试</text><text class="sm" x="686" y="96" text-anchor="middle">第 3 章</text>
+  <rect class="bx-g" x="430" y="126" width="148" height="50" rx="8"/><text class="lbl on-g" x="504" y="148" text-anchor="middle">集成测试</text><text class="sm" x="504" y="166" text-anchor="middle">第 9 章</text>
+  <rect class="bx-g" x="586" y="126" width="148" height="50" rx="8"/><text class="lbl on-g" x="660" y="148" text-anchor="middle">系统测试</text><text class="sm" x="660" y="166" text-anchor="middle">第 9 章</text>
+  <rect class="bx-p" x="430" y="196" width="148" height="50" rx="8"/><text class="lbl on-p" x="504" y="218" text-anchor="middle">属性测试</text><text class="sm" x="504" y="236" text-anchor="middle">第 5 章</text>
+  <rect class="bx-p" x="586" y="196" width="148" height="50" rx="8"/><text class="lbl on-p" x="660" y="218" text-anchor="middle">变异测试</text><text class="sm" x="660" y="236" text-anchor="middle">第 3 章</text>
+  <text class="sm" x="580" y="290" text-anchor="middle">从多个角度检验实现</text>
+
+  <path class="ln-a" d="M346 120 C375 100 385 100 412 120" marker-end="url(#ar-a)"/>
+  <path class="ln-a" d="M412 200 C385 220 375 220 346 200" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="380" y="160" text-anchor="middle">来回</text>
+  <text class="sm on-a" x="380" y="176" text-anchor="middle">迭代</text>
+</svg>
+<figcaption>图 11-1　再看一次全书地图：箭头是双向的，你会在各种技术之间来回穿梭</figcaption>
+</figure>
+
+<p>
+  这张图和本书的章节顺序可能给你一种线性的感觉（先做规格测试，再做结构化测试……），但事实并非如此。<strong>别把它看成测试的瀑布流程。</strong>
+  软件开发是迭代的：你可能先做规格测试，再做结构化测试，然后觉得需要回到规格测试；也可能因为 TDD 时产生的测试已经足够好，直接从结构化测试开始。针对具体情况定制流程完全没问题。
+  随着经验增长，你会逐渐找到应用这些技术的最佳顺序。只要你掌握了所有技术、理解了每种技术的目标和产出，这会自然而然地到来。
+</p>
+
+<h2 id="bug-free">无 Bug 的软件：现实还是神话？</h2>
+
+<p>
+  这些技术从多个不同角度审视源代码，可能给你一种印象：全都用上，就再也不会有 Bug 了。可惜并非如此。
+  从越多角度测试代码，发现之前没看到的 Bug 的机会就越大；但今天的软件系统非常复杂，Bug 可能出现在涉及几十个组件协同工作的边角情况里。
+  领域知识能帮你看到这些情况 —— 所以，<strong>深入理解你所测系统背后的业务</strong>，是预见可能导致崩溃或 Bug 的复杂交互的根本。
+</p>
+
+<h3>押注智能测试</h3>
+<p>
+  作者说他把所有筹码都押在<strong>智能测试（intelligent testing）</strong>上：让计算机替我们探索软件系统。本书自动化的是测试的<em>执行</em>，而测试用例的<em>设计</em> —— 想出好的测试 —— 是人的活动；智能测试系统则会为我们<strong>提出</strong>测试用例。
+  这在学术界已不新鲜，有些技术已经成熟到可以部署在生产中：Facebook 部署了 Sapienz，用基于搜索的算法自动探索移动应用、寻找崩溃；Google 大规模运行模糊测试（生成意外输入看程序会不会崩溃），在开源系统中找 Bug。
+  而研究的美妙之处在于，这些工具并不是随机生成数据 —— 它们越来越聪明了。
+</p>
+
+<div class="tw">
+<table>
+  <tr><th>想试试自动生成测试 / 模糊测试？</th><th>Java</th><th>Python</th><th>TypeScript / JavaScript</th></tr>
+  <tr><td>自动生成单元测试</td><td>EvoSuite（作者推荐：常常能达到 100% 分支覆盖）、Randoop</td><td>Pynguin</td><td>—（可借助属性测试 + 覆盖率）</td></tr>
+  <tr><td>覆盖率引导的模糊测试</td><td>Jazzer</td><td>Atheris</td><td>Jazzer.js</td></tr>
+  <tr><td>大规模持续模糊测试</td><td colspan="3">Google OSS-Fuzz（支持以上多种语言）</td></tr>
+</table>
+</div>
+
+<h2 id="user">让最终用户参与进来</h2>
+<p>
+  本书聚焦于<strong>验证</strong>：确保代码按我们的预期工作。另一个角度是<strong>确认</strong>：软件是否做了用户想要或需要的事（还记得第 1 章的「无错误谬论」吗？）。
+  交付最有价值的软件，和交付能工作的软件同样重要。确保你的流程里有机制保证你在构建<strong>对的软件</strong>。
+</p>
+
+<h2 id="legacy">现实中单元测试很难</h2>
+
+<p>
+  作者的立场很明确：尽可能多做单元测试，把集成测试留给真正需要它的部分。为此你需要容易测试、为可测试性而设计的代码。
+  然而大多数读者并不处于这种理想状态 —— 软件系统很少是这样设计的。当你写新代码、对它有更多控制权时，确保写成可单元测试的样子。
+  这意味着要把新代码和难以测试的遗留代码整合在一起。一个在大多数情况下都管用的简单建议：
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="在遗留类里调用一个新的、可测试的类，而不是把新行为直接写进遗留类">
+  <rect class="bx-r" x="20" y="20" width="300" height="160" rx="12"/>
+  <text class="ttl on-r" x="170" y="46" text-anchor="middle">LegacyClass（难以测试）</text>
+  <text class="mono" x="40" y="74">complexMethod() {</text>
+  <text class="mono" x="56" y="94">// 大量代码……</text>
+  <rect class="bx-a" x="52" y="104" width="252" height="26" rx="4"/>
+  <text class="mono on-a" x="60" y="122">new Beautiful…().cleanMethod();</text>
+  <text class="mono" x="56" y="148">// 大量代码……</text>
+  <text class="mono" x="40" y="168">}</text>
+  <path class="ln-a" d="M306 117 H436" marker-end="url(#ar-a)"/>
+  <text class="sm on-a" x="371" y="108" text-anchor="middle">只加一行调用</text>
+  <rect class="bx-g" x="440" y="50" width="300" height="100" rx="12"/>
+  <text class="ttl on-g" x="590" y="78" text-anchor="middle">BeautifullyDesignedClass</text>
+  <text class="mono" x="590" y="104" text-anchor="middle">cleanMethod()</text>
+  <text class="sm" x="590" y="128" text-anchor="middle">新行为都在这里：同样复杂，但可测 ✔</text>
+</svg>
+<figcaption>图 11-2　把新行为放进一个新的、可测试的类，遗留类只负责调用它</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="处理遗留代码"><pre>
+class LegacyClass {
+  public void complexMethod() {
+    // ……
+    // 大量代码……
+    // ……
+    new BeautifullyDesignedClass().cleanMethod();   // 在遗留类里调用新类中的行为
+    // ……
+    // 大量代码……
+    // ……
+  }
+}
+
+class BeautifullyDesignedClass {                     // 这个类也可能复杂，但它是可测试的
+  public void cleanMethod() {
+    // ……
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="处理遗留代码"><pre>
+class LegacyClass:
+    def complex_method(self) -&gt; None:
+        # ……
+        # 大量代码……
+        # ……
+        BeautifullyDesignedClass().clean_method()    # 在遗留类里调用新类中的行为
+        # ……
+        # 大量代码……
+        # ……
+
+class BeautifullyDesignedClass:                      # 这个类也可能复杂，但它是可测试的
+    def clean_method(self) -&gt; None:
+        ...
+</pre></div>
+<div class="code" data-lang="ts" data-file="处理遗留代码"><pre>
+class LegacyClass {
+  complexMethod(): void {
+    // ……
+    // 大量代码……
+    // ……
+    new BeautifullyDesignedClass().cleanMethod();    // 在遗留类里调用新类中的行为
+    // ……
+    // 大量代码……
+    // ……
+  }
+}
+
+class BeautifullyDesignedClass {                     // 这个类也可能复杂，但它是可测试的
+  cleanMethod(): void {
+    // ……
+  }
+}
+</pre></div>
+</div>
+
+<p>
+  需要给遗留类加新行为时，不要把它写进这个类，而是<strong>新建一个类</strong>，把新行为放进去并单元测试它；然后在遗留类里实例化新类、调用它的方法。
+  这样就免去了为一个几乎不可能测试的类写测试的麻烦。（Feathers 在《修改代码的艺术》中称之为「萌芽类（Sprout Class）」。）你的具体情况也许需要不同的做法，但思路相同。
+  推荐阅读 Feathers 的书（2004），以及 Evans（2004）提出的<strong>防腐层（anti-corruption layer）</strong>。
+</p>
+
+<h2 id="monitoring">投资监控</h2>
+<p>
+  你尽了最大努力在部署前抓住所有 Bug，但实践中你知道那是不可能的。那能做什么？<strong>确保 Bug 一在生产环境出现就能被发现。</strong>
+  软件监控和测试同样重要，这比你想的更复杂：
+</p>
+<ul>
+  <li><strong>要记录什么？</strong>日志太多会压垮基础设施，太少又没有足够信息调试。确保团队有好的指南：记录什么、用什么日志级别……（作者团队的一篇论文表明，机器学习可以向开发者推荐在哪里打日志 —— Cândido 等，2021。）</li>
+  <li><strong>如何从海量日志中发现异常？</strong>系统每月可能产生数百万甚至数十亿行日志。有些异常软件自己就能处理，开发者照样记下来，但它们往往不重要。投资于识别<strong>真正重要</strong>的异常，是一个务实的挑战。</li>
+</ul>
+
+<h2 id="next">接下来学什么</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#9889;</span><h4>非功能测试</h4><p>性能、可伸缩性、安全性这类非功能需求也可以测。Gayathri Mohan 的《Full Stack Testing》（2022）覆盖得不错。</p></div>
+  <div class="card"><span class="ic">&#127959;</span><h4>特定架构和上下文的测试</h4><p>不同技术需要不同的测试模式：写 API 就写 API 测试，写 Vue 应用就写 Vue 测试。推荐《Testing Web APIs》、《Exploring Testing Java Microservices》、《Testing Vue.js Applications》等。</p></div>
+  <div class="card"><span class="ic">&#955;</span><h4>你所用语言的可测试性设计</h4><p>本书主要讲面向对象语言的原则。函数式语言的原则可能有所不同，比如 Clojure 里的 TDD。</p></div>
+  <div class="card"><span class="ic">&#128269;</span><h4>静态分析工具</h4><p>SonarQube、SpotBugs（Java），Ruff、mypy、Bandit（Python），ESLint、typescript-eslint（TS）。它们基于静态分析寻找特定的 Bug 模式，速度很快，可以放进持续集成。强烈建议熟悉它们。</p></div>
+  <div class="card"><span class="ic">&#128200;</span><h4>软件监控</h4><p>A/B 测试、蓝绿部署等技术，能让漏过测试的 Bug 更难到达生产。入门推荐 Rouan Wilsenach 的博文《QA in Production》（martinfowler.com）。</p></div>
+</div>
+
+<h2 id="cheatsheet">三语言工具速查表</h2>
+
+<p>本书用 Java 讲解，本教程为每个示例都配上了 Python 和 TypeScript 版本。下面把各章用到的工具汇总在一起：</p>
+
+<div class="tw">
+<table>
+  <tr><th>用途</th><th>Java（书中）</th><th>Python</th><th>TypeScript</th><th>章节</th></tr>
+  <tr><td>测试框架</td><td>JUnit 5</td><td>pytest</td><td>Vitest（或 Jest）</td><td><a href="appendix.html">附录</a></td></tr>
+  <tr><td>断言</td><td>AssertJ</td><td>原生 <code>assert</code>（pytest 自动展开细节）</td><td><code>expect</code></td><td>全书</td></tr>
+  <tr><td>参数化测试</td><td><code>@ParameterizedTest</code> + <code>@CsvSource</code>/<code>@MethodSource</code></td><td><code>@pytest.mark.parametrize</code></td><td><code>test.each</code></td><td><a href="ch02.html">2</a></td></tr>
+  <tr><td>代码覆盖率</td><td>JaCoCo</td><td>coverage.py / pytest-cov</td><td><code>@vitest/coverage-v8</code></td><td><a href="ch03.html">3</a></td></tr>
+  <tr><td>变异测试</td><td>Pitest（PIT）</td><td>mutmut</td><td>StrykerJS</td><td><a href="ch03.html">3</a></td></tr>
+  <tr><td>契约 / 断言</td><td><code>assert</code>（需 <code>-ea</code>）、异常</td><td><code>assert</code>（<code>-O</code> 会移除）、icontract</td><td>自定义 <code>asserts cond</code> 函数</td><td><a href="ch04.html">4</a></td></tr>
+  <tr><td>属性测试</td><td>jqwik</td><td>Hypothesis</td><td>fast-check</td><td><a href="ch05.html">5</a></td></tr>
+  <tr><td>有状态属性测试</td><td><code>ActionSequence</code></td><td><code>RuleBasedStateMachine</code></td><td><code>fc.commands</code> + <code>fc.modelRun</code></td><td><a href="ch05.html">5</a></td></tr>
+  <tr><td>Mock / Stub</td><td>Mockito</td><td><code>unittest.mock</code></td><td><code>vi.fn</code> / <code>vi.spyOn</code></td><td><a href="ch06.html">6</a></td></tr>
+  <tr><td>控制时间</td><td><code>Clock</code> 包装 / <code>mockStatic</code></td><td><code>Clock</code> 包装 / time-machine、freezegun</td><td><code>Clock</code> 包装 / <code>vi.useFakeTimers</code></td><td><a href="ch06.html">6</a></td></tr>
+  <tr><td>依赖注入</td><td>构造函数；Spring、Guice</td><td>构造函数；FastAPI <code>Depends</code></td><td>构造函数；NestJS、tsyringe</td><td><a href="ch07.html">7</a></td></tr>
+  <tr><td>SQL 集成测试</td><td>JDBC + HSQLDB / Testcontainers</td><td>sqlite3 / SQLAlchemy + Testcontainers</td><td><code>node:sqlite</code> / Prisma + Testcontainers</td><td><a href="ch09.html">9</a></td></tr>
+  <tr><td>Web 系统测试</td><td>Selenium WebDriver</td><td>Playwright（pytest-playwright）/ Selenium</td><td>Playwright（<code>@playwright/test</code>）</td><td><a href="ch09.html">9</a></td></tr>
+  <tr><td>测试数据构建</td><td>Test Data Builder、Datafaker</td><td>构建器 / 工厂函数、factory_boy、Faker</td><td>构建器 / 工厂函数、fishery、@faker-js/faker</td><td><a href="ch10.html">10</a></td></tr>
+  <tr><td>软断言</td><td>AssertJ <code>SoftAssertions</code></td><td>pytest-check</td><td><code>expect.soft</code></td><td><a href="ch10.html">10</a></td></tr>
+</table>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 如果只记住一件事</div>
+  <p>
+    <strong>工具会变，思考方式不会。</strong>本书的核心不是 JUnit、Mockito 或 jqwik，而是：从需求推导分区和边界，用代码结构补漏，用契约和属性表达规律，
+    用替身隔离复杂依赖，为可测试性而设计，并让测试代码本身保持整洁。换任何语言、任何框架，这些都带得走。
+  </p>
+</div>
+
+<p style="font-size:20px;text-align:center;margin:40px 0 10px"><strong>Have fun testing! 祝你测试愉快！</strong></p>
+
+<div class="exercise">
+  <h3>&#9998; 结业练习</h3>
+  <ol>
+    <li>从你自己的项目里挑一个真实的方法，把第 2～5 章的技术完整走一遍：规格测试 → 结构化测试（看覆盖率）→ 契约 → 属性测试 → 变异测试。记录每一步新发现了什么。</li>
+    <li>找一个难测的遗留类，用本章的「萌芽类」手法加一个新功能，并为新类写单元测试。</li>
+    <li>试一个智能测试工具（EvoSuite、Pynguin 或 Jazzer.js），看它自动生成的测试和你手写的有什么不同。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>

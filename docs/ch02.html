@@ -1,0 +1,1458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 2 章 · 基于规格说明的测试 — 有效软件测试</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="2">
+<div id="app">
+<aside id="sidebar"></aside>
+<main>
+
+<span class="chapter-eyebrow">第 2 章</span>
+<h1>基于规格说明的测试</h1>
+<p class="lede">
+  需求文档是测试最宝贵的原材料：它精确地告诉你软件<em>该做什么</em>、<em>不该做什么</em>。
+  这一章教你一套七步法，把一段需求系统地拆解成一组测试用例 —— 不靠灵感，靠方法。
+  你会看到，这套方法能在一段「看起来没问题、覆盖率也 100%」的代码里揪出两个 Bug。
+</p>
+
+<div class="goals">
+  <h4>本章目标</h4>
+  <ul>
+    <li>掌握从需求推导测试的七个步骤</li>
+    <li>学会把输入空间划分成<strong>等价类（分区）</strong>，每类只测一个代表</li>
+    <li>学会找<strong>边界</strong>，理解 on 点、off 点、in 点、out 点</li>
+    <li>学会在组合爆炸时务实地削减用例数量</li>
+    <li>用参数化测试（JUnit / pytest / Vitest）把用例落成代码</li>
+  </ul>
+</div>
+
+<div id="chapter-toc"></div>
+
+<h2 id="where">它在测试流程里的位置</h2>
+
+<p>
+  回顾第 1 章的流程：开发者拿到需求，用 TDD 写好实现，确保代码可测试。所有类都准备好之后，切换到「测试模式」，开始<strong>系统地找 Bug</strong>。
+  基于规格说明的测试（specification-based testing）就是进入测试模式后<strong>第一个</strong>该用的技术。
+</p>
+
+<p>它的核心思想是：<strong>从需求本身推导测试，而不是从代码推导</strong>。具体实现怎么写不太重要（下一章的结构化测试才看代码）。
+所以它也常被称为<em>黑盒测试</em>。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="规格测试看需求，结构化测试看代码">
+  <rect class="bx-b" x="20" y="30" width="180" height="90" rx="12"/>
+  <text class="ttl on-b" x="110" y="64" text-anchor="middle">需求 / 规格</text>
+  <text class="sm" x="110" y="86" text-anchor="middle">用户故事、用例、</text>
+  <text class="sm" x="110" y="102" text-anchor="middle">方法文档注释……</text>
+  <path class="ln-b" d="M202 75 H276" marker-end="url(#ar-b)"/>
+  <text class="sm on-b" x="239" y="66" text-anchor="middle">第 2 章</text>
+  <rect class="bx-a" x="280" y="30" width="200" height="90" rx="12"/>
+  <text class="ttl on-a" x="380" y="70" text-anchor="middle">测试用例</text>
+  <text class="sm" x="380" y="92" text-anchor="middle">输入 + 期望输出</text>
+  <path class="ln-g" d="M558 75 H484" marker-end="url(#ar-g)"/>
+  <text class="sm on-g" x="521" y="66" text-anchor="middle">第 3 章</text>
+  <rect class="bx-g" x="560" y="30" width="180" height="90" rx="12"/>
+  <text class="ttl on-g" x="650" y="64" text-anchor="middle">源代码</text>
+  <text class="sm" x="650" y="86" text-anchor="middle">if、循环、</text>
+  <text class="sm" x="650" y="102" text-anchor="middle">覆盖率报告……</text>
+</svg>
+<figcaption>图 2-1　两种信息来源：先从需求推导测试，再用代码补漏</figcaption>
+</figure>
+
+<h2 id="example">例子：substringsBetween</h2>
+
+<p>
+  假设你要实现一个方法：在字符串里找出所有被「开始标签」和「结束标签」夹住的子串。
+  这是真实开源库 Apache Commons Lang 里的方法。需求如下：
+</p>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：substringsBetween(str, open, close)</div>
+  <p>在字符串中查找以 open 开头、以 close 结尾的子串，把所有匹配的子串放进数组返回。</p>
+  <ul>
+    <li><code>str</code> —— 包含子串的字符串。null 返回 null；空字符串返回空数组。</li>
+    <li><code>open</code> —— 标识子串开始的字符串。空字符串返回 null。</li>
+    <li><code>close</code> —— 标识子串结束的字符串。空字符串返回 null。</li>
+  </ul>
+  <p>返回子串数组；如果没有任何匹配，返回 null。<br>
+  例：<code>str = "axcaycazc"</code>，<code>open = "a"</code>，<code>close = "c"</code>，输出 <code>["x", "y", "z"]</code>。</p>
+</div>
+
+<p>下面是实现。先别急着找 Bug —— 这次代码来自一群非常优秀的开发者，我们的重点是学习<strong>如何推导测试</strong>。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/StringUtils.java"><pre>
+public static String[] substringsBetween(final String str,
+    final String open, final String close) {
+  // 前置条件不满足，直接返回 null
+  if (str == null || isEmpty(open) || isEmpty(close)) {
+    return null;
+  }
+  final int strLen = str.length();
+  if (strLen == 0) {
+    return EMPTY_STRING_ARRAY;          // 空字符串 → 空数组
+  }
+  final int closeLen = close.length();
+  final int openLen = open.length();
+  final List&lt;String&gt; list = new ArrayList&lt;&gt;();
+  int pos = 0;                          // 当前扫描到的位置
+
+  while (pos &lt; strLen - closeLen) {
+    int start = str.indexOf(open, pos); // 找下一个 open
+    if (start &lt; 0) {
+      break;                            // 再也没有 open 了
+    }
+    start += openLen;
+    final int end = str.indexOf(close, start);  // 在 open 之后找 close
+    if (end &lt; 0) {
+      break;                            // 再也没有 close 了
+    }
+    list.add(str.substring(start, end));
+    pos = end + closeLen;               // 指针移到这个 close 之后
+  }
+  if (list.isEmpty()) {
+    return null;                        // 一个都没找到 → null
+  }
+  return list.toArray(EMPTY_STRING_ARRAY);
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="string_utils.py"><pre>
+def substrings_between(s: str | None, open_: str | None, close: str | None) -&gt; list[str] | None:
+    # 前置条件不满足，直接返回 None（not open_ 同时覆盖 None 和 ""）
+    if s is None or not open_ or not close:
+        return None
+    if len(s) == 0:
+        return []                       # 空字符串 → 空列表
+
+    result = []
+    pos = 0                             # 当前扫描到的位置
+    while pos &lt; len(s) - len(close):
+        start = s.find(open_, pos)      # 找下一个 open，找不到返回 -1
+        if start &lt; 0:
+            break
+        start += len(open_)
+        end = s.find(close, start)      # 在 open 之后找 close
+        if end &lt; 0:
+            break
+        result.append(s[start:end])
+        pos = end + len(close)          # 指针移到这个 close 之后
+
+    return result if result else None   # 一个都没找到 → None
+</pre></div>
+<div class="code" data-lang="ts" data-file="stringUtils.ts"><pre>
+export function substringsBetween(
+  str: string | null, open: string | null, close: string | null,
+): string[] | null {
+  // 前置条件不满足，直接返回 null
+  if (str == null || !open || !close) {
+    return null;
+  }
+  if (str.length === 0) {
+    return [];                          // 空字符串 → 空数组
+  }
+
+  const result: string[] = [];
+  let pos = 0;                          // 当前扫描到的位置
+  while (pos &lt; str.length - close.length) {
+    let start = str.indexOf(open, pos); // 找下一个 open，找不到返回 -1
+    if (start &lt; 0) break;
+    start += open.length;
+    const end = str.indexOf(close, start);  // 在 open 之后找 close
+    if (end &lt; 0) break;
+    result.push(str.substring(start, end));
+    pos = end + close.length;           // 指针移到这个 close 之后
+  }
+  return result.length &gt; 0 ? result : null;  // 一个都没找到 → null
+}
+</pre></div>
+</div>
+
+<p>用需求里的例子走一遍，看看循环每一轮在做什么：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="substringsBetween 在 axcaycazc 上的三轮循环">
+  <!-- 表头：下标 -->
+  <text class="sm" x="20" y="24">下标</text>
+  <text class="mono" x="190" y="24" text-anchor="middle">0</text><text class="mono" x="234" y="24" text-anchor="middle">1</text>
+  <text class="mono" x="278" y="24" text-anchor="middle">2</text><text class="mono" x="322" y="24" text-anchor="middle">3</text>
+  <text class="mono" x="366" y="24" text-anchor="middle">4</text><text class="mono" x="410" y="24" text-anchor="middle">5</text>
+  <text class="mono" x="454" y="24" text-anchor="middle">6</text><text class="mono" x="498" y="24" text-anchor="middle">7</text>
+  <text class="mono" x="542" y="24" text-anchor="middle">8</text>
+
+  <!-- 第 1 轮 -->
+  <text class="lbl" x="20" y="64">第 1 轮</text>
+  <text class="sm" x="20" y="80">pos = 0</text>
+  <rect class="bx-a" x="170" y="44" width="40" height="40" rx="5"/><text class="mono on-a" x="190" y="69" text-anchor="middle">a</text>
+  <rect class="bx-g" x="214" y="44" width="40" height="40" rx="5"/><text class="mono on-g" x="234" y="69" text-anchor="middle">x</text>
+  <rect class="bx-b" x="258" y="44" width="40" height="40" rx="5"/><text class="mono on-b" x="278" y="69" text-anchor="middle">c</text>
+  <rect class="bx" x="302" y="44" width="40" height="40" rx="5"/><text class="mono" x="322" y="69" text-anchor="middle">a</text>
+  <rect class="bx" x="346" y="44" width="40" height="40" rx="5"/><text class="mono" x="366" y="69" text-anchor="middle">y</text>
+  <rect class="bx" x="390" y="44" width="40" height="40" rx="5"/><text class="mono" x="410" y="69" text-anchor="middle">c</text>
+  <rect class="bx" x="434" y="44" width="40" height="40" rx="5"/><text class="mono" x="454" y="69" text-anchor="middle">a</text>
+  <rect class="bx" x="478" y="44" width="40" height="40" rx="5"/><text class="mono" x="498" y="69" text-anchor="middle">z</text>
+  <rect class="bx" x="522" y="44" width="40" height="40" rx="5"/><text class="mono" x="542" y="69" text-anchor="middle">c</text>
+  <text class="lbl" x="590" y="60">取出 "x"</text>
+  <text class="sm" x="590" y="78">pos → 3</text>
+
+  <!-- 第 2 轮 -->
+  <text class="lbl" x="20" y="134">第 2 轮</text>
+  <text class="sm" x="20" y="150">pos = 3</text>
+  <rect class="bx" x="170" y="114" width="40" height="40" rx="5"/><text class="mono" x="190" y="139" text-anchor="middle">a</text>
+  <rect class="bx" x="214" y="114" width="40" height="40" rx="5"/><text class="mono" x="234" y="139" text-anchor="middle">x</text>
+  <rect class="bx" x="258" y="114" width="40" height="40" rx="5"/><text class="mono" x="278" y="139" text-anchor="middle">c</text>
+  <rect class="bx-a" x="302" y="114" width="40" height="40" rx="5"/><text class="mono on-a" x="322" y="139" text-anchor="middle">a</text>
+  <rect class="bx-g" x="346" y="114" width="40" height="40" rx="5"/><text class="mono on-g" x="366" y="139" text-anchor="middle">y</text>
+  <rect class="bx-b" x="390" y="114" width="40" height="40" rx="5"/><text class="mono on-b" x="410" y="139" text-anchor="middle">c</text>
+  <rect class="bx" x="434" y="114" width="40" height="40" rx="5"/><text class="mono" x="454" y="139" text-anchor="middle">a</text>
+  <rect class="bx" x="478" y="114" width="40" height="40" rx="5"/><text class="mono" x="498" y="139" text-anchor="middle">z</text>
+  <rect class="bx" x="522" y="114" width="40" height="40" rx="5"/><text class="mono" x="542" y="139" text-anchor="middle">c</text>
+  <text class="lbl" x="590" y="130">取出 "y"</text>
+  <text class="sm" x="590" y="148">pos → 6</text>
+
+  <!-- 第 3 轮 -->
+  <text class="lbl" x="20" y="204">第 3 轮</text>
+  <text class="sm" x="20" y="220">pos = 6</text>
+  <rect class="bx" x="170" y="184" width="40" height="40" rx="5"/><text class="mono" x="190" y="209" text-anchor="middle">a</text>
+  <rect class="bx" x="214" y="184" width="40" height="40" rx="5"/><text class="mono" x="234" y="209" text-anchor="middle">x</text>
+  <rect class="bx" x="258" y="184" width="40" height="40" rx="5"/><text class="mono" x="278" y="209" text-anchor="middle">c</text>
+  <rect class="bx" x="302" y="184" width="40" height="40" rx="5"/><text class="mono" x="322" y="209" text-anchor="middle">a</text>
+  <rect class="bx" x="346" y="184" width="40" height="40" rx="5"/><text class="mono" x="366" y="209" text-anchor="middle">y</text>
+  <rect class="bx" x="390" y="184" width="40" height="40" rx="5"/><text class="mono" x="410" y="209" text-anchor="middle">c</text>
+  <rect class="bx-a" x="434" y="184" width="40" height="40" rx="5"/><text class="mono on-a" x="454" y="209" text-anchor="middle">a</text>
+  <rect class="bx-g" x="478" y="184" width="40" height="40" rx="5"/><text class="mono on-g" x="498" y="209" text-anchor="middle">z</text>
+  <rect class="bx-b" x="522" y="184" width="40" height="40" rx="5"/><text class="mono on-b" x="542" y="209" text-anchor="middle">c</text>
+  <text class="lbl" x="590" y="200">取出 "z"</text>
+  <text class="sm" x="590" y="218">pos → 9，循环结束</text>
+
+  <!-- 图例 -->
+  <rect class="bx-a" x="170" y="252" width="16" height="16" rx="3"/><text class="sm" x="192" y="265">open（start 找到的位置）</text>
+  <rect class="bx-g" x="360" y="252" width="16" height="16" rx="3"/><text class="sm" x="382" y="265">被取出的子串</text>
+  <rect class="bx-b" x="480" y="252" width="16" height="16" rx="3"/><text class="sm" x="502" y="265">close（end 找到的位置）</text>
+</svg>
+<figcaption>图 2-2　三轮循环：每轮先找 open，再在它后面找 close，取出中间部分，然后把 pos 移到 close 之后</figcaption>
+</figure>
+
+<div class="box tip">
+  <div class="t">&#128161; 先自己试一试</div>
+  <p>继续往下读之前，再看一遍需求，把你能想到的所有测试用例写下来（格式随意，比如「三个参数都是 null」）。读完本章后，拿你的清单和我们一起推导出的对比一下。</p>
+</div>
+
+<h2 id="seven">七步法</h2>
+
+<p>最理想的测试方法是把所有可能的输入组合都试一遍 —— 但三个字符串参数的组合是无穷的。我们需要务实。作者提出的七步法结合了 Ostrand 和 Balcer 1988 年的<strong>类别划分法（category-partition）</strong>与 Kaner 等人的《领域测试手册》：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="基于规格说明测试的七个步骤">
+  <rect class="bx-b" x="14"  y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-b" x="62" y="64" text-anchor="middle">① 理解</text>
+  <text class="sm" x="62" y="84" text-anchor="middle">需求、输入、输出</text>
+  <rect class="bx-b" x="122" y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-b" x="170" y="64" text-anchor="middle">② 探索</text>
+  <text class="sm" x="170" y="84" text-anchor="middle">随手跑一跑</text>
+  <rect class="bx-a" x="230" y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-a" x="278" y="64" text-anchor="middle">③ 分区</text>
+  <text class="sm" x="278" y="84" text-anchor="middle">划分等价类</text>
+  <rect class="bx-a" x="338" y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-a" x="386" y="64" text-anchor="middle">④ 边界</text>
+  <text class="sm" x="386" y="84" text-anchor="middle">分析边界</text>
+  <rect class="bx-g" x="446" y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-g" x="494" y="64" text-anchor="middle">⑤ 设计</text>
+  <text class="sm" x="494" y="84" text-anchor="middle">组合出用例</text>
+  <rect class="bx-g" x="554" y="40" width="96" height="62" rx="10"/>
+  <text class="ttl on-g" x="602" y="64" text-anchor="middle">⑥ 自动化</text>
+  <text class="sm" x="602" y="84" text-anchor="middle">写成测试代码</text>
+  <rect class="bx-p" x="662" y="40" width="86" height="62" rx="10"/>
+  <text class="ttl on-p" x="705" y="64" text-anchor="middle">⑦ 增补</text>
+  <text class="sm" x="705" y="84" text-anchor="middle">创造力+经验</text>
+
+  <path class="ln" d="M110 71 H120" marker-end="url(#ar)"/>
+  <path class="ln" d="M218 71 H228" marker-end="url(#ar)"/>
+  <path class="ln" d="M326 71 H336" marker-end="url(#ar)"/>
+  <path class="ln" d="M434 71 H444" marker-end="url(#ar)"/>
+  <path class="ln" d="M542 71 H552" marker-end="url(#ar)"/>
+  <path class="ln" d="M650 71 H660" marker-end="url(#ar)"/>
+
+  <path class="ln-d" d="M705 104 V150 H278 V106" marker-end="url(#ar)"/>
+  <path class="ln-d" d="M494 104 V130 H386 V106" marker-end="url(#ar)"/>
+  <text class="sm" x="490" y="168" text-anchor="middle">虚线：随时可以回到前面的步骤 —— 这是迭代的，不是流水线</text>
+
+  <rect class="bx-d" x="14" y="188" width="734" height="34" rx="8"/>
+  <text class="lbl" x="381" y="210" text-anchor="middle">最难也最关键的是 ③ 和 ④：漏掉一个分区或边界，就可能漏掉一个 Bug</text>
+</svg>
+<figcaption>图 2-3　七步法。实线是标准路径，虚线表示你会不断回头补充</figcaption>
+</figure>
+
+<h3>第 1 步：理解需求、输入和输出</h3>
+<p>不管需求怎么写（甚至只在你脑子里），它都包含三部分：<strong>业务规则</strong>（程序要做什么）、<strong>输入</strong>（我们正是通过它们来测试不同情况）、<strong>输出</strong>（帮助理解输入如何变成结果）。对 substringsBetween：</p>
+<ol>
+  <li>目标：收集字符串中所有被 open 和 close 夹住的子串。</li>
+  <li>输入三个参数：<code>str</code>（源字符串）、<code>open</code>（开始标签）、<code>close</code>（结束标签）。</li>
+  <li>输出：由找到的所有子串组成的数组。</li>
+</ol>
+
+<h3>第 2 步：探索程序</h3>
+<p>
+  如果代码不是你写的，随手调用几次能快速建立心智模型。作者在一项观察职业开发者的研究中发现，大家面对陌生方法时都会这么做。
+  这一步<strong>不需要系统</strong>，目的是加深理解，而不是测试：
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/StringUtilsExplorationTest.java"><pre>
+// 这些测试凭感觉写，只要能让我学到点东西就行
+@Test
+void simpleCase() {
+  assertThat(StringUtils.substringsBetween("abcd", "a", "d"))
+      .isEqualTo(new String[] { "bc" });
+}
+
+@Test
+void manySubstrings() {
+  assertThat(StringUtils.substringsBetween("abcdabcdab", "a", "d"))
+      .isEqualTo(new String[] { "bc", "bc" });
+}
+
+@Test
+void openAndCloseTagsThatAreLongerThan1Char() {
+  assertThat(StringUtils.substringsBetween("aabcddaabfddaab", "aa", "dd"))
+      .isEqualTo(new String[] { "bc", "bf" });
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_string_utils_exploration.py"><pre>
+# 这些测试凭感觉写，只要能让我学到点东西就行
+def test_simple_case():
+    assert substrings_between("abcd", "a", "d") == ["bc"]
+
+def test_many_substrings():
+    assert substrings_between("abcdabcdab", "a", "d") == ["bc", "bc"]
+
+def test_open_and_close_tags_longer_than_1_char():
+    assert substrings_between("aabcddaabfddaab", "aa", "dd") == ["bc", "bf"]
+</pre></div>
+<div class="code" data-lang="ts" data-file="stringUtils.exploration.test.ts"><pre>
+// 这些测试凭感觉写，只要能让我学到点东西就行
+test("simple case", () =&gt; {
+  expect(substringsBetween("abcd", "a", "d")).toEqual(["bc"]);
+});
+
+test("many substrings", () =&gt; {
+  expect(substringsBetween("abcdabcdab", "a", "d")).toEqual(["bc", "bc"]);
+});
+
+test("open and close tags longer than 1 char", () =&gt; {
+  expect(substringsBetween("aabcddaabfddaab", "aa", "dd")).toEqual(["bc", "bf"]);
+});
+</pre></div>
+</div>
+
+<h3>第 3 步：划分分区（等价类）</h3>
+
+<p>
+  输入几乎无穷，但很多输入会让程序<strong>以同样的方式工作</strong>。比如 <code>("abcd", "a", "d")</code> 返回 <code>"bc"</code>，
+  和 <code>("xyzw", "x", "w")</code> 返回 <code>"yz"</code>，对测试来说没有区别 —— 只是换了字母。
+  这两个输入是<strong>等价的</strong>，属于同一个<strong>分区（partition）</strong>。每个分区测一个代表就够了。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="把无穷的输入空间划分成若干分区，每个分区挑一个代表">
+  <rect class="bx-d" x="20" y="28" width="450" height="192" rx="16"/>
+  <text class="sm" x="24" y="18">所有可能的输入（几乎无穷）</text>
+  <path class="ln" d="M170 28 V220"/>
+  <path class="ln" d="M320 28 V120"/>
+  <path class="ln" d="M170 120 H470"/>
+
+  <text class="lbl" x="95" y="80" text-anchor="middle">分区 A</text>
+  <text class="sm" x="95" y="98" text-anchor="middle">str 为 null</text>
+  <circle class="bx-a" cx="95" cy="140" r="9"/>
+  <circle class="bx" cx="60" cy="176" r="5"/><circle class="bx" cx="130" cy="186" r="5"/>
+
+  <text class="lbl" x="245" y="54" text-anchor="middle">分区 B</text>
+  <text class="sm" x="245" y="72" text-anchor="middle">没有任何标签</text>
+  <circle class="bx-a" cx="245" cy="96" r="9"/>
+  <circle class="bx" cx="200" cy="100" r="5"/><circle class="bx" cx="290" cy="92" r="5"/>
+
+  <text class="lbl" x="395" y="54" text-anchor="middle">分区 C</text>
+  <text class="sm" x="395" y="72" text-anchor="middle">只有 open</text>
+  <circle class="bx-a" cx="395" cy="96" r="9"/>
+  <circle class="bx" cx="350" cy="100" r="5"/><circle class="bx" cx="440" cy="92" r="5"/>
+
+  <text class="lbl" x="320" y="154" text-anchor="middle">分区 D：open 和 close 都有</text>
+  <circle class="bx-a" cx="320" cy="186" r="9"/>
+  <circle class="bx" cx="230" cy="190" r="5"/><circle class="bx" cx="270" cy="200" r="5"/>
+  <circle class="bx" cx="380" cy="196" r="5"/><circle class="bx" cx="420" cy="182" r="5"/>
+
+  <circle class="bx-a" cx="510" cy="60" r="9"/>
+  <text class="lbl" x="528" y="65">每个分区挑一个代表来测</text>
+  <circle class="bx" cx="510" cy="96" r="5"/>
+  <text class="lbl" x="528" y="101">同分区的其他输入：行为相同，不必再测</text>
+  <text class="lbl" x="500" y="150">例如分区 D 里：</text>
+  <text class="mono" x="500" y="172">("abcd","a","d") → ["bc"]</text>
+  <text class="mono" x="500" y="194">("xyzw","x","w") → ["yz"]</text>
+  <text class="sm" x="500" y="214">测一个就够，信任它代表整个分区</text>
+</svg>
+<figcaption>图 2-4　分区的思想：把输入空间切成若干块，块内的输入对程序来说是「一样的」</figcaption>
+</figure>
+
+<p>如何系统地找出所有分区？分三个角度想：</p>
+<ol>
+  <li><strong>每个输入单独看：</strong>「这个参数可能有哪几类取值？」</li>
+  <li><strong>输入之间的组合：</strong>「open 和 close 之间能怎么搭配？」</li>
+  <li><strong>输出有哪几类：</strong>「会返回数组吗？会返回空数组吗？会返回 null 吗？」</li>
+</ol>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 330" role="img" aria-label="substringsBetween 的所有分区">
+  <rect class="bx-b" x="14" y="14" width="236" height="140" rx="10"/>
+  <text class="ttl on-b" x="30" y="38">str（单独看）</text>
+  <text class="lbl" x="30" y="62">a. null</text>
+  <text class="lbl" x="30" y="84">b. 空字符串</text>
+  <text class="lbl" x="30" y="106">c. 长度为 1</text>
+  <text class="lbl" x="30" y="128">d. 长度 &gt; 1</text>
+
+  <rect class="bx-b" x="262" y="14" width="236" height="140" rx="10"/>
+  <text class="ttl on-b" x="278" y="38">open（单独看）</text>
+  <text class="lbl" x="278" y="62">a. null</text>
+  <text class="lbl" x="278" y="84">b. 空字符串</text>
+  <text class="lbl" x="278" y="106">c. 长度为 1</text>
+  <text class="lbl" x="278" y="128">d. 长度 &gt; 1</text>
+
+  <rect class="bx-b" x="510" y="14" width="236" height="140" rx="10"/>
+  <text class="ttl on-b" x="526" y="38">close（单独看）</text>
+  <text class="lbl" x="526" y="62">a. null</text>
+  <text class="lbl" x="526" y="84">b. 空字符串</text>
+  <text class="lbl" x="526" y="106">c. 长度为 1</text>
+  <text class="lbl" x="526" y="128">d. 长度 &gt; 1</text>
+
+  <rect class="bx-a" x="14" y="168" width="400" height="150" rx="10"/>
+  <text class="ttl on-a" x="30" y="192">(str, open, close) 组合起来看</text>
+  <text class="lbl" x="30" y="216">a. str 里既没有 open 也没有 close</text>
+  <text class="lbl" x="30" y="238">b. 有 open，没有 close</text>
+  <text class="lbl" x="30" y="260">c. 有 close，没有 open</text>
+  <text class="lbl" x="30" y="282">d. open 和 close 都有</text>
+  <text class="lbl" x="30" y="304">e. open 和 close 都出现多次</text>
+
+  <rect class="bx-g" x="426" y="168" width="320" height="150" rx="10"/>
+  <text class="ttl on-g" x="442" y="192">输出</text>
+  <text class="lbl" x="442" y="216">数组本身：null / 空 / 1 个元素 / 多个</text>
+  <text class="lbl" x="442" y="242">数组里的每个字符串：</text>
+  <text class="lbl" x="442" y="264">空 / 单个字符 / 多个字符</text>
+  <text class="sm" x="442" y="294">输入想清楚了通常也覆盖了输出，但对</text>
+  <text class="sm" x="442" y="310">复杂程序，看输出能发现漏掉的输入</text>
+</svg>
+<figcaption>图 2-5　从三个角度得到的全部分区。注意组合那一栏并没有写在需求里 —— 它来自测试者的经验</figcaption>
+</figure>
+
+<div class="box note">
+  <div class="t">&#9432; null 和空字符串几乎总是值得一测</div>
+  <p>需求明确提到了 str 的 null 和空，而作者即便需求没提也会测它们 —— 它们是经典的异常用例。对 open 和 close 也一样，因为从 str 身上已经学到：在这个程序里它们是特殊的。字符串本质上是字符列表，所以还要测「长度为 1」的情况。</p>
+</div>
+
+<h3>第 4 步：分析边界</h3>
+
+<p>
+  边界附近的 Bug 极其常见。我们都犯过把 <code>&gt;=</code> 写成 <code>&gt;</code> 的错误 —— 这种 Bug 对大多数输入都表现正常，只在边界附近才会失败。
+  看一个简单例子：输入小于 10 打印 <code>"hiphip"</code>，大于等于 10 打印 <code>"hooray"</code>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="hiphip 与 hooray 两个分区之间的边界，on 点是 10，off 点是 9">
+  <rect class="bx-b" x="30" y="40" width="386" height="36" rx="8"/>
+  <text class="ttl on-b" x="223" y="64" text-anchor="middle">"hiphip" 分区（&lt; 10）</text>
+  <rect class="bx-g" x="422" y="40" width="318" height="36" rx="8"/>
+  <text class="ttl on-g" x="581" y="64" text-anchor="middle">"hooray" 分区（&gt;= 10）</text>
+
+  <path class="ln" d="M30 110 H740"/>
+  <g>
+    <text class="mono" x="50"  y="134" text-anchor="middle">1</text>
+    <text class="mono" x="94"  y="134" text-anchor="middle">2</text>
+    <text class="mono" x="138" y="134" text-anchor="middle">3</text>
+    <text class="mono" x="182" y="134" text-anchor="middle">4</text>
+    <text class="mono" x="226" y="134" text-anchor="middle">5</text>
+    <text class="mono" x="270" y="134" text-anchor="middle">6</text>
+    <text class="mono" x="314" y="134" text-anchor="middle">7</text>
+    <text class="mono" x="358" y="134" text-anchor="middle">8</text>
+    <text class="mono on-b" x="402" y="134" text-anchor="middle" style="font-weight:700">9</text>
+    <text class="mono on-g" x="446" y="134" text-anchor="middle" style="font-weight:700">10</text>
+    <text class="mono" x="490" y="134" text-anchor="middle">11</text>
+    <text class="mono" x="534" y="134" text-anchor="middle">12</text>
+    <text class="mono" x="578" y="134" text-anchor="middle">13</text>
+    <text class="mono" x="622" y="134" text-anchor="middle">14</text>
+    <text class="mono" x="666" y="134" text-anchor="middle">15</text>
+    <text class="mono" x="710" y="134" text-anchor="middle">…</text>
+  </g>
+  <path class="ln-a" d="M424 30 V120"/>
+  <text class="sm on-a" x="424" y="22" text-anchor="middle">边界</text>
+
+  <circle class="bx-b" cx="402" cy="110" r="7"/>
+  <circle class="bx-g" cx="446" cy="110" r="7"/>
+  <text class="lbl on-b" x="402" y="162" text-anchor="middle">off 点 = 9</text>
+  <text class="lbl on-g" x="446" y="182" text-anchor="middle">on 点 = 10</text>
+  <text class="sm" x="560" y="170">跨过边界，行为完全改变：</text>
+  <text class="sm" x="560" y="186">这里必须万无一失！</text>
+</svg>
+<figcaption>图 2-6　边界两侧各测一个点：on 点（10）和 off 点（9）</figcaption>
+</figure>
+
+<p>Jeng 和 Weyuker（1994）提出：每遇到一个边界，就测两个点。四个术语要分清：</p>
+
+<dl class="terms">
+  <dt>on 点（on point）</dt>
+  <dd>恰好<strong>在边界上</strong>的点。它通常就是规格里写的那个数（<code>input &gt;= 10</code> 里的 10），也很可能是开发者写进 if 里的那个数。</dd>
+  <dt>off 点（off point）</dt>
+  <dd><strong>离边界最近、但属于另一个分区</strong>的点。这里是 9。</dd>
+  <dt>in 点（in point）</dt>
+  <dd>让条件<strong>为真</strong>的点，有无穷多个：11、12、25、42……</dd>
+  <dt>out 点（out point）</dt>
+  <dd>让条件<strong>为假</strong>的点：8、7、2、-42……</dd>
+</dl>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="不等式边界有一个 off 点，等式边界有两个 off 点">
+  <text class="ttl" x="20" y="24">不等式 x &gt;= 10：一个 on 点，一个 off 点</text>
+  <path class="ln" d="M40 60 H720"/>
+  <path class="ln-g" d="M380 60 H720" style="stroke-width:5"/>
+  <circle class="bx-b" cx="300" cy="60" r="8"/><text class="lbl on-b" x="300" y="88" text-anchor="middle">9 · off</text>
+  <circle class="bx-g" cx="380" cy="60" r="8"/><text class="lbl on-g" x="380" y="88" text-anchor="middle">10 · on</text>
+  <text class="sm" x="560" y="46" text-anchor="middle">in 点：11, 12, 42…</text>
+  <text class="sm" x="160" y="46" text-anchor="middle">out 点：8, 7, -42…</text>
+
+  <text class="ttl" x="20" y="130">等式 x == 10：一个 on 点，两个 off 点</text>
+  <path class="ln" d="M40 166 H720"/>
+  <circle class="bx-b" cx="290" cy="166" r="8"/><text class="lbl on-b" x="290" y="194" text-anchor="middle">9 · off</text>
+  <circle class="bx-g" cx="380" cy="166" r="8"/><text class="lbl on-g" x="380" y="194" text-anchor="middle">10 · on / in</text>
+  <circle class="bx-b" cx="470" cy="166" r="8"/><text class="lbl on-b" x="470" y="194" text-anchor="middle">11 · off</text>
+  <text class="sm" x="620" y="152" text-anchor="middle">56 是 out 点，但不是 off 点</text>
+</svg>
+<figcaption>图 2-7　等式的边界两边都能「出界」，所以需要三个测试</figcaption>
+</figure>
+
+<p>
+  找边界的诀窍：<strong>看所有分区，想一想它们之间的输入</strong>。对 substringsBetween，一个明显的边界是 str 从空变成非空 ——
+  已经被分区覆盖了。更值得注意的是：open 和 close 都在字符串里，但<strong>它们之间什么都没有</strong>。
+</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="子串长度从 0 变成大于 0 时的边界">
+  <rect class="bx-b" x="40" y="30" width="300" height="56" rx="10"/>
+  <text class="ttl on-b" x="190" y="54" text-anchor="middle">没有子串</text>
+  <text class="mono" x="190" y="74" text-anchor="middle">"aabb", "aa", "bb" → [""]</text>
+  <rect class="bx-g" x="420" y="30" width="300" height="56" rx="10"/>
+  <text class="ttl on-g" x="570" y="54" text-anchor="middle">一个子串</text>
+  <text class="mono" x="570" y="74" text-anchor="middle">"aaxbb", "aa", "bb" → ["x"]</text>
+  <path class="ln-a" d="M380 20 V100"/>
+  <text class="sm on-a" x="380" y="118" text-anchor="middle">len(子串) = 0 │ len(子串) &gt; 0</text>
+  <text class="sm" x="380" y="138" text-anchor="middle">open 和 close 都在时，子串长度从 0 变为正数 —— 这是一条边界，要测！</text>
+</svg>
+<figcaption>图 2-8　一个容易被忽略的边界：标签之间是空的</figcaption>
+</figure>
+
+<p>边界两侧各一个测试：「open 和 close 之间没有字符」与「之间有字符」。后者已被其他用例覆盖，可以省掉。</p>
+
+<h3>第 5 步：设计测试用例</h3>
+
+<p>理想情况下，把每个类别的所有分区两两组合。可是算一下：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="从 320 个组合削减到 21 个测试用例">
+  <rect class="bx-r" x="20" y="20" width="330" height="80" rx="12"/>
+  <text class="sm" x="185" y="44" text-anchor="middle">全部组合</text>
+  <text class="ttl on-r" x="185" y="80" text-anchor="middle" style="font-size:22px">4 × 4 × 4 × 5 = 320</text>
+
+  <path class="ln-a" d="M352 60 H408" marker-end="url(#ar-a)"/>
+
+  <rect class="bx-g" x="410" y="20" width="330" height="80" rx="12"/>
+  <text class="sm" x="575" y="44" text-anchor="middle">务实削减后</text>
+  <text class="ttl on-g" x="575" y="80" text-anchor="middle" style="font-size:22px">21 个用例</text>
+
+  <rect class="bx" x="20" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl" x="36" y="140">削减法 1</text>
+  <text class="lbl" x="36" y="162">异常情况（null、空）</text>
+  <text class="lbl" x="36" y="182">只测一次，不参与组合</text>
+  <rect class="bx" x="265" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl" x="281" y="140">削减法 2</text>
+  <text class="lbl" x="281" y="162">str 长度为 1：只需「字符</text>
+  <text class="lbl" x="281" y="182">匹配 / 不匹配标签」</text>
+  <rect class="bx" x="510" y="116" width="230" height="84" rx="10"/>
+  <text class="ttl" x="526" y="140">削减法 3</text>
+  <text class="lbl" x="526" y="162">open/close 长度只测</text>
+  <text class="lbl" x="526" y="182">(1,1) 和 (&gt;1,&gt;1) 两种</text>
+</svg>
+<figcaption>图 2-9　不要盲目组合所有分区 —— 那样会产生大量没价值的用例</figcaption>
+</figure>
+
+<p>
+  为什么异常情况只测一次？把「str 为 null」和 open 的四种情况、close 的四种情况逐一组合，能多发现什么吗？几乎不能。
+  另外，除非有理由怀疑程序对不同长度的 open/close 处理方式不同，否则 <em>(1,1)、(&gt;1,1)、(1,&gt;1)、(&gt;1,&gt;1)</em> 四种组合只需要测两种。
+  （看代码也能帮你判断哪些组合不必测 —— 那是第 3 章的事。）
+</p>
+
+<p>最终得到 21 个用例：</p>
+
+<div class="tw">
+<table>
+  <tr><th>分组</th><th>编号</th><th>用例</th></tr>
+  <tr><td rowspan="6">异常情况</td><td>T1</td><td>str 为 null</td></tr>
+  <tr><td>T2</td><td>str 为空</td></tr>
+  <tr><td>T3</td><td>open 为 null</td></tr>
+  <tr><td>T4</td><td>open 为空</td></tr>
+  <tr><td>T5</td><td>close 为 null</td></tr>
+  <tr><td>T6</td><td>close 为空</td></tr>
+  <tr><td rowspan="4">str 长度 = 1</td><td>T7</td><td>这个字符等于 open</td></tr>
+  <tr><td>T8</td><td>这个字符等于 close</td></tr>
+  <tr><td>T9</td><td>既不等于 open 也不等于 close</td></tr>
+  <tr><td>T10</td><td>同时等于 open 和 close</td></tr>
+  <tr><td rowspan="5">str 长度 &gt; 1<br>open、close 长度 = 1</td><td>T11</td><td>既没有 open 也没有 close</td></tr>
+  <tr><td>T12</td><td>有 open，没有 close</td></tr>
+  <tr><td>T13</td><td>有 close，没有 open</td></tr>
+  <tr><td>T14</td><td>open 和 close 都有</td></tr>
+  <tr><td>T15</td><td>open 和 close 都出现多次</td></tr>
+  <tr><td rowspan="5">str 长度 &gt; 1<br>open、close 长度 &gt; 1</td><td>T16</td><td>既没有 open 也没有 close</td></tr>
+  <tr><td>T17</td><td>有 open，没有 close</td></tr>
+  <tr><td>T18</td><td>有 close，没有 open</td></tr>
+  <tr><td>T19</td><td>open 和 close 都有</td></tr>
+  <tr><td>T20</td><td>open 和 close 都出现多次</td></tr>
+  <tr><td>边界</td><td>T21</td><td>open 和 close 都有，但中间没有字符</td></tr>
+</table>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 注意这个过程几乎不需要灵感</div>
+  <p>我们只是按部就班地走完了每一步。这正是「系统化」的意义：换一个人来做，也应该得到差不多的清单。</p>
+</div>
+
+<h3>第 6 步：自动化</h3>
+
+<p>把用例变成代码基本上是机械劳动，创造性的部分在于：为每个分区挑出具体的输入值，并想清楚正确的输出。
+作者把 21 个用例分到了几个测试方法里，每个方法对应一组：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/StringUtilsTest.java"><pre>
+import static ch2.StringUtils.substringsBetween;
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class StringUtilsTest {
+
+  @Test
+  void strIsNullOrEmpty() {
+    assertThat(substringsBetween(null, "a", "b")).isEqualTo(null);            // T1
+    assertThat(substringsBetween("", "a", "b")).isEqualTo(new String[]{});    // T2
+  }
+
+  @Test
+  void openIsNullOrEmpty() {
+    assertThat(substringsBetween("abc", null, "b")).isEqualTo(null);          // T3
+    assertThat(substringsBetween("abc", "", "b")).isEqualTo(null);            // T4
+  }
+
+  @Test
+  void closeIsNullOrEmpty() {
+    assertThat(substringsBetween("abc", "a", null)).isEqualTo(null);          // T5
+    assertThat(substringsBetween("abc", "a", "")).isEqualTo(null);            // T6
+  }
+
+  @Test
+  void strOfLength1() {
+    assertThat(substringsBetween("a", "a", "b")).isEqualTo(null);             // T7
+    assertThat(substringsBetween("a", "b", "a")).isEqualTo(null);             // T8
+    assertThat(substringsBetween("a", "b", "b")).isEqualTo(null);             // T9
+    assertThat(substringsBetween("a", "a", "a")).isEqualTo(null);             // T10
+  }
+
+  @Test
+  void openAndCloseOfLength1() {
+    assertThat(substringsBetween("abc", "x", "y")).isEqualTo(null);           // T11
+    assertThat(substringsBetween("abc", "a", "y")).isEqualTo(null);           // T12
+    assertThat(substringsBetween("abc", "x", "c")).isEqualTo(null);           // T13
+    assertThat(substringsBetween("abc", "a", "c"))
+        .isEqualTo(new String[] {"b"});                                       // T14
+    assertThat(substringsBetween("abcabc", "a", "c"))
+        .isEqualTo(new String[] {"b", "b"});                                  // T15
+  }
+
+  @Test
+  void openAndCloseTagsOfDifferentSizes() {
+    assertThat(substringsBetween("aabcc", "xx", "yy")).isEqualTo(null);       // T16
+    assertThat(substringsBetween("aabcc", "aa", "yy")).isEqualTo(null);       // T17
+    assertThat(substringsBetween("aabcc", "xx", "cc")).isEqualTo(null);       // T18
+    assertThat(substringsBetween("aabbcc", "aa", "cc"))
+        .isEqualTo(new String[] {"bb"});                                      // T19
+    assertThat(substringsBetween("aabbccaaeecc", "aa", "cc"))
+        .isEqualTo(new String[] {"bb", "ee"});                                // T20
+  }
+
+  @Test
+  void noSubstringBetweenOpenAndCloseTags() {
+    assertThat(substringsBetween("aabb", "aa", "bb"))
+        .isEqualTo(new String[] {""});                                        // T21
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_string_utils.py"><pre>
+import pytest
+from string_utils import substrings_between
+
+# pytest 的参数化：一行就是一个用例，失败时会单独报告是哪一行
+@pytest.mark.parametrize("s, open_, close, expected", [
+    # 异常情况
+    (None, "a", "b", None),                        # T1
+    ("", "a", "b", []),                            # T2
+    ("abc", None, "b", None),                      # T3
+    ("abc", "", "b", None),                        # T4
+    ("abc", "a", None, None),                      # T5
+    ("abc", "a", "", None),                        # T6
+    # str 长度 = 1
+    ("a", "a", "b", None),                         # T7
+    ("a", "b", "a", None),                         # T8
+    ("a", "b", "b", None),                         # T9
+    ("a", "a", "a", None),                         # T10
+    # open、close 长度 = 1
+    ("abc", "x", "y", None),                       # T11
+    ("abc", "a", "y", None),                       # T12
+    ("abc", "x", "c", None),                       # T13
+    ("abc", "a", "c", ["b"]),                      # T14
+    ("abcabc", "a", "c", ["b", "b"]),              # T15
+    # open、close 长度 &gt; 1
+    ("aabcc", "xx", "yy", None),                   # T16
+    ("aabcc", "aa", "yy", None),                   # T17
+    ("aabcc", "xx", "cc", None),                   # T18
+    ("aabbcc", "aa", "cc", ["bb"]),                # T19
+    ("aabbccaaeecc", "aa", "cc", ["bb", "ee"]),    # T20
+    # 边界
+    ("aabb", "aa", "bb", [""]),                    # T21
+])
+def test_substrings_between(s, open_, close, expected):
+    assert substrings_between(s, open_, close) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="stringUtils.test.ts"><pre>
+import { test, expect } from "vitest";
+import { substringsBetween } from "./stringUtils";
+
+type Case = [string | null, string | null, string | null, string[] | null];
+
+// Vitest 的参数化：test.each 为每一行生成一个独立的测试
+test.each&lt;Case&gt;([
+  // 异常情况
+  [null, "a", "b", null],                          // T1
+  ["", "a", "b", []],                              // T2
+  ["abc", null, "b", null],                        // T3
+  ["abc", "", "b", null],                          // T4
+  ["abc", "a", null, null],                        // T5
+  ["abc", "a", "", null],                          // T6
+  // str 长度 = 1
+  ["a", "a", "b", null],                           // T7
+  ["a", "b", "a", null],                           // T8
+  ["a", "b", "b", null],                           // T9
+  ["a", "a", "a", null],                           // T10
+  // open、close 长度 = 1
+  ["abc", "x", "y", null],                         // T11
+  ["abc", "a", "y", null],                         // T12
+  ["abc", "x", "c", null],                         // T13
+  ["abc", "a", "c", ["b"]],                        // T14
+  ["abcabc", "a", "c", ["b", "b"]],                // T15
+  // open、close 长度 &gt; 1
+  ["aabcc", "xx", "yy", null],                     // T16
+  ["aabcc", "aa", "yy", null],                     // T17
+  ["aabcc", "xx", "cc", null],                     // T18
+  ["aabbcc", "aa", "cc", ["bb"]],                  // T19
+  ["aabbccaaeecc", "aa", "cc", ["bb", "ee"]],      // T20
+  // 边界
+  ["aabb", "aa", "bb", [""]],                      // T21
+])("substringsBetween(%j, %j, %j) = %j", (str, open, close, expected) =&gt; {
+  expect(substringsBetween(str, open, close)).toEqual(expected);
+});
+</pre></div>
+</div>
+
+<div class="box note">
+  <div class="t">&#9432; 一个方法放几个断言？</div>
+  <p>
+    有人主张一个用例一个测试方法（21 个方法），好处是方法名就能清楚描述用例。也可以用参数化测试（Python 和 TypeScript 标签页里就是这样写的）。
+    作者在复杂业务系统里偏爱「一个方法只测一件事」；但这里输入很多、而且大多是同一分区的变体，所以分组写更合适。这件事很主观，第 10 章再讨论测试代码质量。
+  </p>
+  <p>另外，像 T1 这种「str 为 null」的用例，open 和 close 传什么都无所谓。作者的习惯是：<strong>给不关心的参数传合理的值</strong>，不要让它们干扰测试。</p>
+</div>
+
+<h3>第 7 步：用创造力和经验增补</h3>
+
+<p>
+  系统化很好，但永远不要丢掉经验。回头看这些用例，作者发现<strong>从没试过带空格的字符串</strong>，于是基于 T15 和 T20 各加了一个带空格的变体。
+  也许实现对字符串是一视同仁的，不需要这个测试 —— 但只看需求时你并不知道，而测试特殊字符总是个好主意。
+</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/StringUtilsTest.java（增补）"><pre>
+@Test
+void openAndCloseOfLength1() {
+  // ……前面的断言
+  assertThat(substringsBetween("abcabyt byrc", "a", "c"))
+      .isEqualTo(new String[] {"b", "byt byr"});
+}
+
+@Test
+void openAndCloseTagsOfDifferentSizes() {
+  // ……前面的断言
+  assertThat(substringsBetween("a abb ddc ca abbcc", "a a", "c c"))
+      .isEqualTo(new String[] {"bb dd"});
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_string_utils.py（增补）"><pre>
+# 在上面的参数列表末尾追加两行
+    ("abcabyt byrc", "a", "c", ["b", "byt byr"]),
+    ("a abb ddc ca abbcc", "a a", "c c", ["bb dd"]),
+</pre></div>
+<div class="code" data-lang="ts" data-file="stringUtils.test.ts（增补）"><pre>
+// 在上面的参数列表末尾追加两行
+  ["abcabyt byrc", "a", "c", ["b", "byt byr"]],
+  ["a abb ddc ca abbcc", "a a", "c c", ["bb dd"]],
+</pre></div>
+</div>
+
+<p>现在一共 23 个用例。规格测试做完了 —— 但<strong>测试还没做完</strong>。下一步要把实现代码也纳入视野，那是第 3 章的内容。</p>
+
+<div class="box deep">
+  <div class="t">&#128270; 四只眼睛比两只好</div>
+  <p>
+    一位审稿人问：输入 <code>"aabcddaabeddaab"</code>、open 为 <code>"aa"</code>、close 为 <code>"d"</code> 呢？
+    <code>"bc"</code> 和 <code>"be"</code> 是答案，但 <code>"bcddaabed"</code> 似乎也可以算一个子串。作者起初以为漏了用例，其实它和 T15、T20 是同一类 ——
+    只是思考角度不同：作者想的是「多个标签会不会让程序出错」，审稿人想的是「程序会不会错误地去匹配更长的子串」。
+    我们尽量系统化，但很多东西取决于你如何建模问题。<strong>想到新用例，就加进去！</strong>（仓库里的 <code>closeTagAppearingMultipleTimes</code> 测试就是它。）
+  </p>
+</div>
+
+<h2 id="bugs">用规格测试抓 Bug：两数相加</h2>
+
+<p>
+  Apache Commons 的开发者太优秀了，我们没找到 Bug。来看一个作者自己写的例子 —— 他说自己是「时不时会犯错的普通开发者」。
+  这道题来自 LeetCode 风格的编程挑战，<strong>试着在揭晓前找出 Bug</strong>：
+</p>
+
+<div class="box key">
+  <div class="t">&#128203; 需求：add(left, right)</div>
+  <p>接收两个用数字列表表示的数 left 和 right，把它们相加，结果也用数字列表返回。
+  每个元素必须是 [0–9] 之间的数，否则抛出 IllegalArgumentException。</p>
+  <ul>
+    <li><code>left</code> —— 左边的数。null 返回 null；空列表表示 0。</li>
+    <li><code>right</code> —— 右边的数。null 返回 null；空列表表示 0。</li>
+  </ul>
+  <p>例：23 + 42 → <code>[2,3] + [4,2] = [6,5]</code>。</p>
+</div>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="初版 NumberUtils.add（有 Bug）"><pre>
+public List&lt;Integer&gt; add(List&lt;Integer&gt; left, List&lt;Integer&gt; right) {
+  if (left == null || right == null)
+    return null;
+
+  // 反转，让最低位在最前面，方便循环
+  Collections.reverse(left);
+  Collections.reverse(right);
+
+  LinkedList&lt;Integer&gt; result = new LinkedList&lt;&gt;();
+  int carry = 0;
+  for (int i = 0; i &lt; max(left.size(), right.size()); i++) {
+    int leftDigit = left.size() &gt; i ? left.get(i) : 0;
+    int rightDigit = right.size() &gt; i ? right.get(i) : 0;
+
+    if (leftDigit &lt; 0 || leftDigit &gt; 9 || rightDigit &lt; 0 || rightDigit &gt; 9)
+      throw new IllegalArgumentException();
+
+    int sum = leftDigit + rightDigit + carry;
+    result.addFirst(sum % 10);   // 当前位
+    carry = sum / 10;            // 进位
+  }
+  return result;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="初版 number_utils.add（有 Bug）"><pre>
+def add(left: list[int] | None, right: list[int] | None) -&gt; list[int] | None:
+    if left is None or right is None:
+        return None
+
+    # 反转，让最低位在最前面，方便循环
+    l, r = left[::-1], right[::-1]
+
+    result = []
+    carry = 0
+    for i in range(max(len(l), len(r))):
+        left_digit = l[i] if i &lt; len(l) else 0
+        right_digit = r[i] if i &lt; len(r) else 0
+
+        if not (0 &lt;= left_digit &lt;= 9) or not (0 &lt;= right_digit &lt;= 9):
+            raise ValueError("digits must be in [0, 9]")
+
+        s = left_digit + right_digit + carry
+        result.insert(0, s % 10)   # 当前位
+        carry = s // 10            # 进位
+    return result
+</pre></div>
+<div class="code" data-lang="ts" data-file="初版 numberUtils.add（有 Bug）"><pre>
+export function add(left: number[] | null, right: number[] | null): number[] | null {
+  if (left == null || right == null) return null;
+
+  // 反转，让最低位在最前面，方便循环
+  const l = [...left].reverse();
+  const r = [...right].reverse();
+
+  const result: number[] = [];
+  let carry = 0;
+  for (let i = 0; i &lt; Math.max(l.length, r.length); i++) {
+    const leftDigit = i &lt; l.length ? l[i] : 0;
+    const rightDigit = i &lt; r.length ? r[i] : 0;
+
+    if (leftDigit &lt; 0 || leftDigit &gt; 9 || rightDigit &lt; 0 || rightDigit &gt; 9)
+      throw new RangeError("digits must be in [0, 9]");
+
+    const sum = leftDigit + rightDigit + carry;
+    result.unshift(sum % 10);           // 当前位
+    carry = Math.floor(sum / 10);       // 进位
+  }
+  return result;
+}
+</pre></div>
+</div>
+
+<p>作者当时只是玩玩，随手试了几个输入，结果都对。如果不看 null 和前置条件检查，下面这 4 个测试甚至已经达到了 <strong>100% 分支覆盖率</strong>：</p>
+
+<div class="tw">
+<table>
+  <tr><th>用例</th><th>输入</th><th>输出</th><th>结果</th></tr>
+  <tr><td>T1</td><td><code>[1] + [1]</code></td><td><code>[2]</code></td><td class="ok">✔ 通过</td></tr>
+  <tr><td>T2</td><td><code>[1,5] + [1,0]</code></td><td><code>[2,5]</code></td><td class="ok">✔ 通过</td></tr>
+  <tr><td>T3</td><td><code>[1,5] + [1,5]</code></td><td><code>[3,0]</code></td><td class="ok">✔ 通过</td></tr>
+  <tr><td>T4</td><td><code>[5,0,0] + [2,5,0]</code></td><td><code>[7,5,0]</code></td><td class="ok">✔ 通过</td></tr>
+</table>
+</div>
+
+<p>提交到平台，被拒了。代码有 Bug。我们用规格测试把它找出来。</p>
+
+<h3>分析分区</h3>
+
+<div class="cards">
+  <div class="card"><h4>left（单独看）</h4><p>它是列表：null、空、一位数、多位数。它表示一个数，所以再加上<strong>左边有前导零</strong>（没用，但要看程序能否处理）。</p></div>
+  <div class="card"><h4>right（单独看）</h4><p>和 left 完全一样的五个分区。</p></div>
+  <div class="card"><h4>(left, right) 组合</h4><p>长度可以不同：left 更长、right 更长、一样长。加法交换律告诉我们，谁大谁小放哪边结果都一样。</p></div>
+</div>
+
+<p>然后是<strong>进位</strong>。需求里根本没提进位，但任何懂加法的人都知道它是这个问题的核心：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="18 加 15 的进位过程">
+  <text class="mono" x="260" y="40" text-anchor="end" style="font-size:22px">1 8</text>
+  <text class="mono" x="260" y="76" text-anchor="end" style="font-size:22px">+ 1 5</text>
+  <path class="ln" d="M180 90 H270"/>
+  <text class="mono on-a" x="260" y="122" text-anchor="end" style="font-size:22px">3 3</text>
+  <text class="mono on-a" x="228" y="18" text-anchor="middle" style="font-size:13px">+1</text>
+
+  <rect class="bx-b" x="330" y="20" width="400" height="44" rx="8"/>
+  <text class="lbl on-b" x="346" y="47">个位：8 + 5 = 13 → 写下 3，向十位进 1</text>
+  <rect class="bx-a" x="330" y="76" width="400" height="44" rx="8"/>
+  <text class="lbl on-a" x="346" y="103">十位：1 + 1 + 进位 1 = 3 → 写下 3</text>
+  <text class="sm" x="330" y="150">进位是这个程序最重要的业务逻辑，它值得一整组测试</text>
+</svg>
+<figcaption>图 2-10　18 + 15 = 33 的进位过程</figcaption>
+</figure>
+
+<ul>
+  <li>没有进位</li>
+  <li>有进位：一次，发生在最低位</li>
+  <li>有进位：一次，发生在中间</li>
+  <li>有进位：多次连续</li>
+  <li>有进位：多次但不连续</li>
+  <li>有进位：<strong>进位产生了一个新的最高位</strong></li>
+</ul>
+
+<div class="box warn">
+  <div class="t">&#9888; 领域知识仍然是关键</div>
+  <p>
+    读到这里你可能觉得：只要分析每个参数，就能推导出所有需要的用例。要是那么简单就好了！
+    分析参数能帮你找到很多 Bug，但深入理解需求依然至关重要。这里需求没提进位，我们围绕它设计了一堆测试，是因为<strong>我们懂加法</strong>。
+    系统的方法能帮你发现很多常见 Bug，但学习你所在系统的业务领域，是你自己的功课。
+  </p>
+</div>
+
+<p>唯一值得单独测的边界：像 <code>99 + 1</code> 这样，进位一路传到一个新的最高位。</p>
+
+<h3>设计用例并自动化</h3>
+
+<p>策略：null 和空只测一次；一位数只测一次；多位数分「等长」和「不等长」两组，每组都覆盖全部进位情况，不等长时 left 长和 right 长各测一遍；前导零测几个就够；最后测边界。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/NumberUtilsTest.java"><pre>
+public class NumberUtilsTest {
+
+  @ParameterizedTest              // 参数化测试：一个「骨架」，套用多组数据
+  @MethodSource("testCases")      // 数据来自下面的 testCases() 方法
+  void shouldReturnCorrectResult(List&lt;Integer&gt; left,
+      List&lt;Integer&gt; right, List&lt;Integer&gt; expected) {
+    assertThat(new NumberUtils().add(left, right)).isEqualTo(expected);
+  }
+
+  static Stream&lt;Arguments&gt; testCases() {
+    return Stream.of(
+      // null 与空
+      of(null, numbers(7,2), null),                                 // T1
+      of(numbers(), numbers(7,2), numbers(7,2)),                    // T2
+      of(numbers(9,8), null, null),                                 // T3
+      of(numbers(9,8), numbers(), numbers(9,8)),                    // T4
+      // 一位数
+      of(numbers(1), numbers(2), numbers(3)),                       // T5
+      of(numbers(9), numbers(2), numbers(1,1)),                     // T6
+      // 多位数，等长
+      of(numbers(2,2), numbers(3,3), numbers(5,5)),                 // T7  无进位
+      of(numbers(2,9), numbers(2,3), numbers(5,2)),                 // T8  最低位进位
+      of(numbers(2,9,3), numbers(1,8,3), numbers(4,7,6)),           // T9  中间进位
+      of(numbers(1,7,9), numbers(2,6,8), numbers(4,4,7)),           // T10 多次进位
+      of(numbers(1,9,1,7,1), numbers(1,8,1,6,1), numbers(3,7,3,3,2)), // T11 多次不连续
+      of(numbers(9,9,8), numbers(1,7,2), numbers(1,1,7,0)),         // T12 新最高位
+      // 多位数，不等长（两个方向各一遍）
+      of(numbers(2,2), numbers(3), numbers(2,5)),                   // T13.1
+      of(numbers(3), numbers(2,2), numbers(2,5)),                   // T13.2
+      of(numbers(2,2), numbers(9), numbers(3,1)),                   // T14.1
+      of(numbers(9), numbers(2,2), numbers(3,1)),                   // T14.2
+      of(numbers(1,7,3), numbers(9,2), numbers(2,6,5)),             // T15.1
+      of(numbers(9,2), numbers(1,7,3), numbers(2,6,5)),             // T15.2
+      of(numbers(3,1,7,9), numbers(2,6,8), numbers(3,4,4,7)),       // T16.1
+      of(numbers(2,6,8), numbers(3,1,7,9), numbers(3,4,4,7)),       // T16.2
+      of(numbers(1,9,1,7,1), numbers(2,1,8,1,6,1), numbers(2,3,7,3,3,2)), // T17.1
+      of(numbers(2,1,8,1,6,1), numbers(1,9,1,7,1), numbers(2,3,7,3,3,2)), // T17.2
+      of(numbers(9,9,8), numbers(9,1,7,2), numbers(1,0,1,7,0)),     // T18.1
+      of(numbers(9,1,7,2), numbers(9,9,8), numbers(1,0,1,7,0)),     // T18.2
+      // 前导零
+      of(numbers(0,0,0,1,2), numbers(0,2,3), numbers(3,5)),         // T19
+      of(numbers(0,0,0,1,2), numbers(0,2,9), numbers(4,1)),         // T20
+      // 边界
+      of(numbers(9,9), numbers(1), numbers(1,0,0))                  // T21
+    );
+  }
+
+  // 辅助方法：让测试数据更易读
+  private static List&lt;Integer&gt; numbers(int... nums) {
+    List&lt;Integer&gt; list = new ArrayList&lt;&gt;();
+    for (int n : nums) list.add(n);
+    return list;
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_number_utils.py"><pre>
+import pytest
+from number_utils import add
+
+@pytest.mark.parametrize("left, right, expected", [
+    # None 与空
+    (None, [7, 2], None),                                   # T1
+    ([], [7, 2], [7, 2]),                                   # T2
+    ([9, 8], None, None),                                   # T3
+    ([9, 8], [], [9, 8]),                                   # T4
+    # 一位数
+    ([1], [2], [3]),                                        # T5
+    ([9], [2], [1, 1]),                                     # T6
+    # 多位数，等长
+    ([2, 2], [3, 3], [5, 5]),                               # T7  无进位
+    ([2, 9], [2, 3], [5, 2]),                               # T8  最低位进位
+    ([2, 9, 3], [1, 8, 3], [4, 7, 6]),                      # T9  中间进位
+    ([1, 7, 9], [2, 6, 8], [4, 4, 7]),                      # T10 多次进位
+    ([1, 9, 1, 7, 1], [1, 8, 1, 6, 1], [3, 7, 3, 3, 2]),    # T11 多次不连续
+    ([9, 9, 8], [1, 7, 2], [1, 1, 7, 0]),                   # T12 新最高位
+    # 多位数，不等长（两个方向各一遍）
+    ([2, 2], [3], [2, 5]),                                  # T13.1
+    ([3], [2, 2], [2, 5]),                                  # T13.2
+    ([2, 2], [9], [3, 1]),                                  # T14.1
+    ([9], [2, 2], [3, 1]),                                  # T14.2
+    ([1, 7, 3], [9, 2], [2, 6, 5]),                         # T15.1
+    ([9, 2], [1, 7, 3], [2, 6, 5]),                         # T15.2
+    ([3, 1, 7, 9], [2, 6, 8], [3, 4, 4, 7]),                # T16.1
+    ([2, 6, 8], [3, 1, 7, 9], [3, 4, 4, 7]),                # T16.2
+    ([1, 9, 1, 7, 1], [2, 1, 8, 1, 6, 1], [2, 3, 7, 3, 3, 2]),  # T17.1
+    ([2, 1, 8, 1, 6, 1], [1, 9, 1, 7, 1], [2, 3, 7, 3, 3, 2]),  # T17.2
+    ([9, 9, 8], [9, 1, 7, 2], [1, 0, 1, 7, 0]),             # T18.1
+    ([9, 1, 7, 2], [9, 9, 8], [1, 0, 1, 7, 0]),             # T18.2
+    # 前导零
+    ([0, 0, 0, 1, 2], [0, 2, 3], [3, 5]),                   # T19
+    ([0, 0, 0, 1, 2], [0, 2, 9], [4, 1]),                   # T20
+    # 边界
+    ([9, 9], [1], [1, 0, 0]),                               # T21
+])
+def test_should_return_correct_result(left, right, expected):
+    assert add(left, right) == expected
+</pre></div>
+<div class="code" data-lang="ts" data-file="numberUtils.test.ts"><pre>
+import { test, expect } from "vitest";
+import { add } from "./numberUtils";
+
+type N = number[] | null;
+
+test.each&lt;[N, N, N]&gt;([
+  // null 与空
+  [null, [7, 2], null],                                   // T1
+  [[], [7, 2], [7, 2]],                                   // T2
+  [[9, 8], null, null],                                   // T3
+  [[9, 8], [], [9, 8]],                                   // T4
+  // 一位数
+  [[1], [2], [3]],                                        // T5
+  [[9], [2], [1, 1]],                                     // T6
+  // 多位数，等长
+  [[2, 2], [3, 3], [5, 5]],                               // T7  无进位
+  [[2, 9], [2, 3], [5, 2]],                               // T8  最低位进位
+  [[2, 9, 3], [1, 8, 3], [4, 7, 6]],                      // T9  中间进位
+  [[1, 7, 9], [2, 6, 8], [4, 4, 7]],                      // T10 多次进位
+  [[1, 9, 1, 7, 1], [1, 8, 1, 6, 1], [3, 7, 3, 3, 2]],    // T11 多次不连续
+  [[9, 9, 8], [1, 7, 2], [1, 1, 7, 0]],                   // T12 新最高位
+  // 多位数，不等长（两个方向各一遍）
+  [[2, 2], [3], [2, 5]],                                  // T13.1
+  [[3], [2, 2], [2, 5]],                                  // T13.2
+  [[2, 2], [9], [3, 1]],                                  // T14.1
+  [[9], [2, 2], [3, 1]],                                  // T14.2
+  [[1, 7, 3], [9, 2], [2, 6, 5]],                         // T15.1
+  [[9, 2], [1, 7, 3], [2, 6, 5]],                         // T15.2
+  [[3, 1, 7, 9], [2, 6, 8], [3, 4, 4, 7]],                // T16.1
+  [[2, 6, 8], [3, 1, 7, 9], [3, 4, 4, 7]],                // T16.2
+  [[1, 9, 1, 7, 1], [2, 1, 8, 1, 6, 1], [2, 3, 7, 3, 3, 2]],  // T17.1
+  [[2, 1, 8, 1, 6, 1], [1, 9, 1, 7, 1], [2, 3, 7, 3, 3, 2]],  // T17.2
+  [[9, 9, 8], [9, 1, 7, 2], [1, 0, 1, 7, 0]],             // T18.1
+  [[9, 1, 7, 2], [9, 9, 8], [1, 0, 1, 7, 0]],             // T18.2
+  // 前导零
+  [[0, 0, 0, 1, 2], [0, 2, 3], [3, 5]],                   // T19
+  [[0, 0, 0, 1, 2], [0, 2, 9], [4, 1]],                   // T20
+  // 边界
+  [[9, 9], [1], [1, 0, 0]],                               // T21
+])("add(%j, %j) = %j", (left, right, expected) =&gt; {
+  expect(add(left, right)).toEqual(expected);
+});
+</pre></div>
+</div>
+
+<p>跑起来，<strong>一大片红</strong>！</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="初版 add 的两个 Bug：丢失最后的进位，以及保留了前导零">
+  <text class="ttl on-r" x="20" y="24">Bug 1：最后一次进位丢了</text>
+  <rect class="bx" x="20" y="36" width="340" height="80" rx="10"/>
+  <text class="mono" x="40" y="62">T6：[9] + [2]</text>
+  <text class="lbl" x="40" y="84">期望 <tspan class="on-g">[1,1]</tspan>　实际 <tspan class="on-r">[1]</tspan></text>
+  <text class="sm" x="40" y="104">9+2=11，写下 1、进位 1，循环就结束了</text>
+
+  <rect class="bx" x="400" y="36" width="340" height="80" rx="10"/>
+  <text class="mono" x="420" y="62">T12：[9,9,8] + [1,7,2]</text>
+  <text class="lbl" x="420" y="84">期望 <tspan class="on-g">[1,1,7,0]</tspan>　实际 <tspan class="on-r">[1,7,0]</tspan></text>
+  <text class="sm" x="420" y="104">最高位产生的进位没有地方放</text>
+
+  <text class="ttl on-r" x="20" y="150">Bug 2：前导零没去掉（修完 Bug 1 后暴露）</text>
+  <rect class="bx" x="20" y="162" width="720" height="56" rx="10"/>
+  <text class="mono" x="40" y="186">T19：[0,0,0,1,2] + [0,2,3]</text>
+  <text class="lbl" x="40" y="206">期望 <tspan class="on-g">[3,5]</tspan>　实际 <tspan class="on-r">[0,0,0,3,5]</tspan></text>
+</svg>
+<figcaption>图 2-11　规格测试揪出的两个 Bug —— 都是「少写了代码」，而不是「写错了代码」</figcaption>
+</figure>
+
+<p>修复很简单：循环结束后如果还有进位，补到最前面；返回前去掉前导零。</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/NumberUtils.java（修复后结尾）"><pre>
+  // ……循环
+
+  // 还有剩余进位，加到最前面（修复 Bug 1）
+  if (carry &gt; 0)
+    result.addFirst(carry);
+
+  // 去掉前导零（修复 Bug 2）
+  while (result.size() &gt; 1 &amp;&amp; result.get(0) == 0)
+    result.remove(0);
+
+  return result;
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="number_utils.py（修复后结尾）"><pre>
+    # ……循环
+
+    # 还有剩余进位，加到最前面（修复 Bug 1）
+    if carry &gt; 0:
+        result.insert(0, carry)
+
+    # 去掉前导零（修复 Bug 2）
+    while len(result) &gt; 1 and result[0] == 0:
+        result.pop(0)
+
+    return result
+</pre></div>
+<div class="code" data-lang="ts" data-file="numberUtils.ts（修复后结尾）"><pre>
+  // ……循环
+
+  // 还有剩余进位，加到最前面（修复 Bug 1）
+  if (carry &gt; 0) result.unshift(carry);
+
+  // 去掉前导零（修复 Bug 2）
+  while (result.length &gt; 1 &amp;&amp; result[0] === 0) result.shift();
+
+  return result;
+}
+</pre></div>
+</div>
+
+<p>最后别忘了需求里的前置条件：每一位必须在 [0, 9]。传几组非法数字进去：</p>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/NumberUtilsTest.java"><pre>
+@ParameterizedTest
+@MethodSource("digitsOutOfRange")
+void shouldThrowExceptionWhenDigitsAreOutOfRange(List&lt;Integer&gt; left, List&lt;Integer&gt; right) {
+  assertThatThrownBy(() -&gt; new NumberUtils().add(left, right))
+      .isInstanceOf(IllegalArgumentException.class);
+}
+
+static Stream&lt;Arguments&gt; digitsOutOfRange() {
+  return Stream.of(
+    of(numbers(1,-1,1), numbers(1)),
+    of(numbers(1), numbers(1,-1,1)),
+    of(numbers(1,11,1), numbers(1)),
+    of(numbers(1), numbers(1,11,1))
+  );
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="test_number_utils.py"><pre>
+@pytest.mark.parametrize("left, right", [
+    ([1, -1, 1], [1]),
+    ([1], [1, -1, 1]),
+    ([1, 11, 1], [1]),
+    ([1], [1, 11, 1]),
+])
+def test_should_raise_when_digits_are_out_of_range(left, right):
+    with pytest.raises(ValueError):
+        add(left, right)
+</pre></div>
+<div class="code" data-lang="ts" data-file="numberUtils.test.ts"><pre>
+test.each([
+  [[1, -1, 1], [1]],
+  [[1], [1, -1, 1]],
+  [[1, 11, 1], [1]],
+  [[1], [1, 11, 1]],
+])("add(%j, %j) throws", (left, right) =&gt; {
+  expect(() =&gt; add(left, right)).toThrow(RangeError);
+});
+</pre></div>
+</div>
+
+<div class="box key">
+  <div class="t">&#128273; 缺失的代码也是 Bug</div>
+  <p>
+    这两个 Bug 不是因为代码写错了，而是因为<strong>少写了代码</strong>。这类 Bug 很常见，而结构化测试（看代码）很难发现它 ——
+    你没法覆盖一行不存在的代码！只有从需求出发才能想到「进位要放到新的最高位」。
+    拿不准时，就写个测试。自动化单元测试写起来很快，多一两个没用的测试也无伤大雅。
+  </p>
+</div>
+
+<div class="box deep">
+  <div class="t">&#128270; 细心的读者：Java 版会修改传入的列表</div>
+  <p>
+    书中 Java 实现用 <code>Collections.reverse(left)</code> 就地反转了调用者传进来的列表 —— 这是一个副作用，调用者之后会发现自己的列表被倒过来了。
+    Python 和 TypeScript 标签页里我们改为先复制再反转（<code>left[::-1]</code>、<code>[...left].reverse()</code>）。
+    这类「方法对输入做了什么承诺」的问题，正是第 4 章「契约」要讨论的。
+  </p>
+</div>
+
+<h2 id="practice">实战经验</h2>
+
+<div class="cards">
+  <div class="card"><span class="ic">&#128260;</span><h4>迭代，而非线性</h4><p>写用例时常会发现漏了某个分区或边界，回头补上就好。</p></div>
+  <div class="card"><span class="ic">&#9878;</span><h4>测到什么程度？</h4><p>看失败的代价。代价高就多投入、多试几种技术；代价低，不那么彻底也行。作者的标准：把所有步骤走两遍，想不出还有什么没测。</p></div>
+  <div class="card"><span class="ic">&#129300;</span><h4>是分区还是边界？无所谓！</h4><p>一个用例是在「分区」步骤还是「边界」步骤冒出来的不重要，重要的是它冒出来了。</p></div>
+  <div class="card"><span class="ic">&#127919;</span><h4>on/off 点就够了</h4><p>它们本身就属于各自的分区。但加几个 in/out 点也无妨 —— 更贴近真实输入，也帮助理解。</p></div>
+  <div class="card"><span class="ic">&#127793;</span><h4>用同一个「种子」输入</h4><p>所有用例都基于 <code>"abc"</code> 做微调：一个失败时，很容易和相邻的通过用例对比。</p></div>
+  <div class="card"><span class="ic">&#128165;</span><h4>组合爆炸时要务实</h4><p>异常情况单独测；用领域知识削减；如果一个方法组合太多，考虑把它<strong>拆成两个</strong>方法。</p></div>
+  <div class="card"><span class="ic">&#128207;</span><h4>拿不准就选最简单的输入</h4><p>能用小整数就别用大整数，能用 5 个字符就别用 100 个。失败时更容易调试。</p></div>
+  <div class="card"><span class="ic">&#129529;</span><h4>不关心的输入也给合理值</h4><p>某个参数和当前测的逻辑无关？传一个贴近真实的值，别让它干扰测试。</p></div>
+  <div class="card"><span class="ic">&#128683;</span><h4>null 要测，但要有意义</h4><p>离 UI 近的代码多测 null、空串、怪异数字；如果架构已保证数据在到达前被清洗过，可以省略。只写可能抓到 Bug 的测试。</p></div>
+  <div class="card"><span class="ic">&#128203;</span><h4>骨架相同就参数化</h4><p>一点重复没关系，大量重复就是问题。21 个几乎一样的方法 × 5 行 = 105 行，参数化能大幅压缩。</p></div>
+  <div class="card"><span class="ic">&#128208;</span><h4>需求可以是任意粒度</h4><p>七步法同样适用于跨多个类的大需求，第 9 章会用在更大的测试上。</p></div>
+  <div class="card"><span class="ic">&#129504;</span><h4>经验和创造力仍然重要</h4><p>老手可能知道空格无关紧要而跳过，新手可能多写一个「没用」的测试。流程帮你记住该想什么，但思考还得你自己来。</p></div>
+</div>
+
+<h3>有状态的类怎么测？</h3>
+
+<p>前两个方法都没有状态，只需考虑输入输出。但面向对象系统里，类是有状态的。比如购物车的 <code>totalPrice()</code> 需要先往车里放商品才能工作：</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="有状态类的测试：先设置状态，再调用方法，再断言">
+  <rect class="bx-b" x="20" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-b" x="120" y="68" text-anchor="middle">① 准备状态</text>
+  <text class="mono" x="120" y="92" text-anchor="middle">cart.add(TV)</text>
+  <text class="mono" x="120" y="112" text-anchor="middle">cart.add(巧克力×2)</text>
+  <path class="ln" d="M222 85 H276" marker-end="url(#ar)"/>
+  <rect class="bx-a" x="280" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-a" x="380" y="68" text-anchor="middle">② 调用方法</text>
+  <text class="mono" x="380" y="100" text-anchor="middle">cart.totalPrice()</text>
+  <path class="ln" d="M482 85 H536" marker-end="url(#ar)"/>
+  <rect class="bx-g" x="540" y="40" width="200" height="90" rx="12"/>
+  <text class="ttl on-g" x="640" y="68" text-anchor="middle">③ 断言结果</text>
+  <text class="mono" x="640" y="100" text-anchor="middle">== 120 + 2.5×2</text>
+  <text class="sm" x="380" y="160" text-anchor="middle">分区时不仅要考虑参数，还要考虑对象的状态：车里 0 件、1 件、多件、不同数量……</text>
+</svg>
+<figcaption>图 2-12　测试有状态的类：思路完全一样，只是多了「准备状态」这一步</figcaption>
+</figure>
+
+<div class="langs">
+<div class="code" data-lang="java" data-file="ch2/ShoppingCart.java + ShoppingCartTest.java"><pre>
+public class ShoppingCart {
+  private List&lt;CartItem&gt; items = new ArrayList&lt;CartItem&gt;();
+
+  public void add(CartItem item) {
+    this.items.add(item);
+  }
+
+  public double totalPrice() {
+    double totalPrice = 0;
+    for (CartItem item : items) {
+      totalPrice += item.getUnitPrice() * item.getQuantity();
+    }
+    return totalPrice;
+  }
+}
+
+public class ShoppingCartTest {
+  // 放成字段：JUnit 会为每个测试方法新建一个测试类实例，所以每次都是新购物车
+  private final ShoppingCart cart = new ShoppingCart();
+
+  @Test
+  void noItems() {
+    assertThat(cart.totalPrice()).isEqualTo(0);
+  }
+
+  @Test
+  void itemsInTheCart() {
+    cart.add(new CartItem("TV", 1, 120));
+    assertThat(cart.totalPrice()).isEqualTo(120);
+
+    cart.add(new CartItem("Chocolate", 2, 2.5));
+    assertThat(cart.totalPrice()).isEqualTo(120 + 2.5 * 2);
+  }
+}
+</pre></div>
+<div class="code" data-lang="python" data-file="shopping_cart.py + test_shopping_cart.py"><pre>
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class CartItem:
+    product: str
+    quantity: int
+    unit_price: float
+
+class ShoppingCart:
+    def __init__(self):
+        self._items: list[CartItem] = []
+
+    def add(self, item: CartItem) -&gt; None:
+        self._items.append(item)
+
+    def total_price(self) -&gt; float:
+        return sum(i.unit_price * i.quantity for i in self._items)
+
+
+# ---- test_shopping_cart.py ----
+import pytest
+
+@pytest.fixture
+def cart():
+    return ShoppingCart()        # 每个测试拿到一个全新的购物车
+
+def test_no_items(cart):
+    assert cart.total_price() == 0
+
+def test_items_in_the_cart(cart):
+    cart.add(CartItem("TV", 1, 120))
+    assert cart.total_price() == 120
+
+    cart.add(CartItem("Chocolate", 2, 2.5))
+    assert cart.total_price() == 120 + 2.5 * 2
+</pre></div>
+<div class="code" data-lang="ts" data-file="shoppingCart.ts + shoppingCart.test.ts"><pre>
+export interface CartItem {
+  product: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export class ShoppingCart {
+  private items: CartItem[] = [];
+
+  add(item: CartItem): void {
+    this.items.push(item);
+  }
+
+  totalPrice(): number {
+    return this.items.reduce((sum, i) =&gt; sum + i.unitPrice * i.quantity, 0);
+  }
+}
+
+// ---- shoppingCart.test.ts ----
+import { beforeEach, test, expect } from "vitest";
+
+let cart: ShoppingCart;
+beforeEach(() =&gt; { cart = new ShoppingCart(); });   // 每个测试一个新购物车
+
+test("no items", () =&gt; {
+  expect(cart.totalPrice()).toBe(0);
+});
+
+test("items in the cart", () =&gt; {
+  cart.add({ product: "TV", quantity: 1, unitPrice: 120 });
+  expect(cart.totalPrice()).toBe(120);
+
+  cart.add({ product: "Chocolate", quantity: 2, unitPrice: 2.5 });
+  expect(cart.totalPrice()).toBe(120 + 2.5 * 2);
+});
+</pre></div>
+</div>
+
+<h2 id="summary">本章小结</h2>
+<ul>
+  <li>需求是生成测试最重要的原材料。</li>
+  <li>规格测试帮助我们系统地探索需求：考察每个输入变量的取值空间，以及它们之间如何相互作用。</li>
+  <li>七步法：理解需求 → 探索程序 → 划分分区 → 分析边界 → 设计用例 → 自动化 → 用创造力和经验增补。</li>
+  <li><strong>Bug 爱边界。</strong>但找出边界可能是规格测试中最难的部分。</li>
+  <li>即使是简单程序，用例数量也可能太多，你必须决定测什么、不测什么。</li>
+</ul>
+
+<h2 id="quiz">自测练习</h2>
+
+<details class="quiz"><summary>2.1　对一个 Map 的 <code>put(key, value)</code> 方法（文档：key 为 null 抛 RuntimeException；已有 key 则替换并返回旧值，否则返回 null）做规格测试，下列哪项说法是<em>错误</em>的？（A 规格没说 value 的细节，要靠经验分区　B 组合数增长快，但对 put 不是问题　C 面向对象中还要考虑对象内部状态　D 没有源代码就无法完成类别划分法）</summary>
+<p><strong>D</strong> 是错的。规格测试是黑盒技术，不需要源代码。</p></details>
+
+<details class="quiz"><summary>2.2　<code>find &lt;pattern&gt; &lt;file&gt;</code> 的分区组合太多了（模式长度、引号、文件名、文件中出现次数、单行出现次数），怎么削减？</summary>
+<ul>
+  <li>把「文件不存在」和「省略文件名」视为异常情况，只测一次；</li>
+  <li>把「模式为空」视为异常，只测一次；</li>
+  <li>把「引号不正确」视为异常，只测一次；</li>
+  <li>「单行出现次数」只在「文件中出现次数」为一次或多次时才组合 —— 文件里一次都没出现，谈不上单行出现几次。</li>
+</ul></details>
+
+<details class="quiz"><summary>2.3　邮编由 4 位数字（[1000, 4000]）和 2 个字母（[C, M]）组成，例如 2628CD。除了显而易见的边界，你还能想到哪些值得测的情况？</summary>
+<p>没有标准答案，关键是说明理由。例如：负数要不要单独测？末尾零？<code>Integer.MAX_VALUE</code> 这种极端值？只有 1 个或多于 2 个字母？小写字母（程序能否区分大小写）？可能的非法分区：<code>[Integer.MIN_VALUE, 999]</code>、<code>[4001, Integer.MAX_VALUE]</code>、<code>[A, B]</code>、<code>[N, Z]</code>、<code>[0, 999]</code>、<code>[AAA, ZZZ]</code>。</p></details>
+
+<details class="quiz"><summary>2.4　FizzBuzz 的测试 T1=15、T2=30、T3=8、T4=6、T5=25，哪个可以删？依据什么概念？</summary>
+<p>按<strong>分区（等价类）</strong>分组：能被 3 和 5 整除 —— T1、T2；只被 3 整除 —— T4；只被 5 整除 —— T5；都不能 —— T3。只有第一个分区有两个用例，所以可以删掉 T1 或 T2 中的一个。</p></details>
+
+<details class="quiz"><summary>2.5　条件 <code>numberOfPoints &lt;= 570</code> 的 on 点和 off 点是？</summary>
+<p><strong>on 点 = 570，off 点 = 571</strong>。on 点直接从条件读出，它让条件为真；off 点是离它最近、让条件为假的点。</p></details>
+
+<details class="quiz"><summary>2.6　等式 <code>x == 10</code> 的 on 点和 off 点是？</summary>
+<p>on 点是 10。等式两边都可以让条件变假，所以有两个 off 点：<strong>9 和 11</strong>。</p></details>
+
+<div class="exercise">
+  <h3>&#9998; 动手练习</h3>
+  <ol>
+    <li>在 <code>ch2</code> 目录运行 <code>mvn test</code>。然后删掉 <code>NumberUtils.add</code> 末尾处理进位的两行，再跑一次，数一数有多少个参数化用例变红。</li>
+    <li>运行 <code>NumberUtilsNonSystematicTest</code>：这 4 个「随手测试」在有 Bug 的版本上是否全部通过？这说明了什么？</li>
+    <li>用七步法为 FizzBuzz 设计测试：列出分区、边界，写成参数化测试（任选 Java / Python / TypeScript）。</li>
+    <li>给 <code>ShoppingCart</code> 想想还缺哪些分区：数量为 0 的商品？负价格？同一商品添加两次？和「产品负责人」（也就是你自己）商量出期望行为，再写测试。</li>
+  </ol>
+</div>
+
+<div id="pager"></div>
+
+</main>
+</div>
+<script src="assets/site.js"></script>
+</body>
+</html>
